@@ -20,7 +20,8 @@
       "Bash(python:*)",
       "Bash(pip install:*)",
       "Bash(tasklist:*)",
-      "Bash(git:*)"
+      "Bash(git:*)",
+      "WebFetch(domain:www.biorxiv.org)"
     ]
   }
 }

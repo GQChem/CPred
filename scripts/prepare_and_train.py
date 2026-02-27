@@ -19,6 +19,7 @@ import pickle
 import warnings
 from pathlib import Path
 from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import numpy as np
 import pandas as pd
@@ -71,6 +72,31 @@ def parse_dataset_s3(supp_dir: Path) -> dict:
     return dict(proteins)
 
 
+def _extract_features_worker(args):
+    """Worker: parse PDB, extract features, return (X, y) or (None, reason)."""
+    pdb_id, info, pdb_path_str, tables = args
+    pdb_path = Path(pdb_path_str)
+    if not pdb_path.exists():
+        return None, f"{pdb_id}: PDB file not found"
+    try:
+        protein = parse_pdb(pdb_path, chain_id=info["chain"])
+    except Exception as e:
+        return None, f"{pdb_id}: parse error: {e}"
+
+    X = extract_features_for_protein(protein, tables)
+    if X is None:
+        return None, f"{pdb_id}: feature extraction failed"
+
+    resnum_to_idx = {rn: i for i, rn in enumerate(protein.residue_numbers)}
+    y = np.zeros(protein.n_residues)
+    for site in info["sites"]:
+        idx = resnum_to_idx.get(site)
+        if idx is not None:
+            y[idx] = 1.0
+
+    return (X, y), None
+
+
 def extract_features_for_protein(protein: ProteinStructure,
                                   tables: PropensityTables) -> np.ndarray | None:
     """Extract and standardize all features for one protein."""
@@ -107,6 +133,57 @@ def extract_features_for_protein(protein: ProteinStructure,
         return None
 
 
+def _parse_one_protein(args):
+    """Worker: parse one PDB and return sequence/DSSP/CP-site data."""
+    pdb_id, info, pdb_path_str = args
+    pdb_path = Path(pdb_path_str)
+    if not pdb_path.exists():
+        return None
+    try:
+        protein = parse_pdb(pdb_path, chain_id=info["chain"])
+    except Exception:
+        return None
+
+    seq = protein.sequence
+    dssp = list(protein.dssp.ss) if protein.dssp is not None else None
+
+    # Build residue_number -> index map once (O(1) lookups)
+    resnum_to_idx = {rn: i for i, rn in enumerate(protein.residue_numbers)}
+
+    exp_aa = []
+    exp_dssp = []
+    for site in info["sites"]:
+        idx = resnum_to_idx.get(site)
+        if idx is None:
+            continue
+        for pos in range(max(0, idx - 3), min(len(seq), idx + 4)):
+            exp_aa.append(seq[pos])
+            if dssp is not None:
+                exp_dssp.append(dssp[pos])
+
+    return seq, dssp, exp_aa, exp_dssp
+
+
+def _make_ngrams_numpy(chars: list[str], n: int,
+                       boundary_stride: int | None = None) -> list[str]:
+    """Fast n-gram construction via numpy char array.
+
+    boundary_stride: if set, skip positions where i % boundary_stride > boundary_stride - n
+    (used to avoid crossing window boundaries in exp_aa).
+    """
+    arr = np.array(list(chars), dtype="U1")
+    if n == 1:
+        return list(arr)
+    # Stack shifted views and join
+    views = np.stack([arr[i: len(arr) - (n - 1 - i)] for i in range(n)], axis=1)
+    grams = np.apply_along_axis(lambda r: "".join(r), 1, views)
+    if boundary_stride is not None:
+        indices = np.arange(len(grams))
+        keep = (indices % boundary_stride) <= (boundary_stride - n)
+        grams = grams[keep]
+    return list(grams)
+
+
 def build_propensity_tables_from_data(proteins_data: dict,
                                        pdb_dir: Path,
                                        tables_dir: Path,
@@ -114,47 +191,36 @@ def build_propensity_tables_from_data(proteins_data: dict,
     """Build propensity tables from experimental CP sites vs whole sequences."""
     print("Building propensity tables from training data...")
 
-    exp_aa = []  # AA at CP site windows
-    comp_aa = []  # AA from whole sequences
+    pdb_ids_list = list(proteins_data.keys())
+    total_pdb = len(pdb_ids_list)
+    worker_args = [
+        (pdb_id, proteins_data[pdb_id], str(pdb_dir / f"{pdb_id}.pdb"))
+        for pdb_id in pdb_ids_list
+    ]
+
+    exp_aa = []
+    comp_aa = []
     exp_dssp = []
     comp_dssp = []
 
-    pdb_ids_list = list(proteins_data.keys())
-    total_pdb = len(pdb_ids_list)
-    for pi, pdb_id in enumerate(pdb_ids_list, 1):
-        info = proteins_data[pdb_id]
-        pdb_path = pdb_dir / f"{pdb_id}.pdb"
-        if not pdb_path.exists():
-            continue
-        try:
-            protein = parse_pdb(pdb_path, chain_id=info["chain"])
-        except Exception:
-            continue
-
-        seq = protein.sequence
-        comp_aa.extend(list(seq))
-
-        # DSSP
-        if protein.dssp is not None:
-            comp_dssp.extend(protein.dssp.ss)
-
-        # Extract elements from CP site windows
-        for site in info["sites"]:
-            # Find index matching the site residue number
-            try:
-                idx = protein.residue_numbers.index(site)
-            except ValueError:
+    n_workers = min(8, os.cpu_count() or 1)
+    print(f"  Parsing {total_pdb} PDB files with {n_workers} workers...", flush=True)
+    completed = 0
+    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        futures = {executor.submit(_parse_one_protein, a): a[0] for a in worker_args}
+        for future in as_completed(futures):
+            result = future.result()
+            completed += 1
+            if result is None:
                 continue
-            for offset in range(-3, 4):
-                pos = idx + offset
-                if 0 <= pos < len(seq):
-                    exp_aa.append(seq[pos])
-                    if protein.dssp is not None:
-                        exp_dssp.append(protein.dssp.ss[pos])
-
-        if pi % 50 == 0 or pi == total_pdb:
-            print(f"  Parsed {pi}/{total_pdb} proteins for propensity data...",
-                  flush=True)
+            seq, dssp, p_exp_aa, p_exp_dssp = result
+            comp_aa.extend(seq)
+            if dssp is not None:
+                comp_dssp.extend(dssp)
+            exp_aa.extend(p_exp_aa)
+            exp_dssp.extend(p_exp_dssp)
+            if completed % 50 == 0 or completed == total_pdb:
+                print(f"  Parsed {completed}/{total_pdb} proteins...", flush=True)
 
     pt = PropensityTables(tables_dir)
 
@@ -165,10 +231,9 @@ def build_propensity_tables_from_data(proteins_data: dict,
         pt.save("single_aa", table)
         print(f"  -> single_aa done: {len(table)} elements", flush=True)
 
-        # Di-residue from concatenated sequences
-        exp_di = [exp_aa[i] + exp_aa[i+1] for i in range(len(exp_aa)-1)
-                  if i % 7 != 6]  # don't cross window boundaries
-        comp_di = [comp_aa[i] + comp_aa[i+1] for i in range(len(comp_aa)-1)]
+        # Di-residue — numpy n-gram construction
+        exp_di = _make_ngrams_numpy(exp_aa, 2, boundary_stride=7)
+        comp_di = _make_ngrams_numpy(comp_aa, 2)
         n_di = len(set(exp_di) | set(comp_di))
         print(f"  Building di_residue table ({len(exp_di)} exp, {len(comp_di)} comp, "
               f"{n_di} unique elements)...", flush=True)
@@ -176,12 +241,9 @@ def build_propensity_tables_from_data(proteins_data: dict,
         pt.save("di_residue", table)
         print(f"  -> di_residue done: {len(table)} elements", flush=True)
 
-        # Oligo-residue
-        exp_oligo = [exp_aa[i] + exp_aa[i+1] + exp_aa[i+2]
-                     for i in range(len(exp_aa)-2)
-                     if i % 7 < 5]
-        comp_oligo = [comp_aa[i] + comp_aa[i+1] + comp_aa[i+2]
-                      for i in range(len(comp_aa)-2)]
+        # Oligo-residue — numpy n-gram construction
+        exp_oligo = _make_ngrams_numpy(exp_aa, 3, boundary_stride=7)
+        comp_oligo = _make_ngrams_numpy(comp_aa, 3)
         n_oligo = len(set(exp_oligo) | set(comp_oligo))
         print(f"  Building oligo_residue table ({len(exp_oligo)} exp, {len(comp_oligo)} comp, "
               f"{n_oligo} unique elements)...", flush=True)
@@ -218,7 +280,7 @@ def main():
     parser.add_argument("--max-proteins", type=int, default=None,
                         help="Limit number of proteins to process (for testing)")
     parser.add_argument("--skip-download", action="store_true")
-    parser.add_argument("--skip-cv", action="store_true")
+    parser.add_argument("--skip-cv", default=True, action="store_true")
     parser.add_argument("--no-gpu", action="store_true",
                         help="Disable GPU acceleration for permutation tests")
     parser.add_argument("--batch-size", type=int, default=50,
@@ -279,10 +341,21 @@ def main():
     print("STEP 3: Building propensity tables")
     print("=" * 60)
 
-    # First pass: quick parse to build propensity tables
     use_gpu = not args.no_gpu
-    tables = build_propensity_tables_from_data(proteins_data, pdb_dir, args.tables_dir,
-                                                use_gpu=use_gpu)
+    required_tables = ["single_aa", "di_residue", "oligo_residue", "dssp",
+                       "ramachandran", "kappa_alpha"]
+    missing = [t for t in required_tables
+               if not (args.tables_dir / f"{t}.json").exists()
+               or (args.tables_dir / f"{t}.json").stat().st_size < 10]
+
+    if not missing:
+        print("  All propensity tables already exist, loading from disk...")
+        tables = PropensityTables(args.tables_dir)
+        tables.load()
+    else:
+        print(f"  Missing or incomplete tables: {missing}")
+        tables = build_propensity_tables_from_data(proteins_data, pdb_dir, args.tables_dir,
+                                                    use_gpu=use_gpu)
 
     # =========================================================
     # Step 4: Extract features and build training matrix
@@ -291,66 +364,62 @@ def main():
     print("STEP 4: Extracting features")
     print("=" * 60)
 
-    all_X = []
-    all_y = []
-    processed = 0
-    skipped = 0
+    cache_path = args.data_dir / "features_cache.npz"
+    if cache_path.exists() and cache_path.stat().st_size > 100:
+        print(f"  Feature cache found, loading from {cache_path}...")
+        cached = np.load(cache_path)
+        X_train = cached["X"]
+        y_train = cached["y"]
+    else:
+        all_X = []
+        all_y = []
+        processed = 0
+        skipped = 0
 
-    pdb_ids = list(proteins_data.keys())
-    for i, pdb_id in enumerate(pdb_ids):
-        pdb_path = pdb_dir / f"{pdb_id}.pdb"
-        if not pdb_path.exists():
-            skipped += 1
-            continue
+        pdb_ids = list(proteins_data.keys())
+        worker_args = [
+            (pdb_id, proteins_data[pdb_id], str(pdb_dir / f"{pdb_id}.pdb"), tables)
+            for pdb_id in pdb_ids
+        ]
 
-        info = proteins_data[pdb_id]
-        try:
-            protein = parse_pdb(pdb_path, chain_id=info["chain"])
-        except Exception:
-            skipped += 1
-            continue
+        n_workers = min(8, os.cpu_count() or 1)
+        print(f"  Extracting features with {n_workers} workers...", flush=True)
+        completed = 0
+        with ProcessPoolExecutor(max_workers=n_workers) as executor:
+            futures = {executor.submit(_extract_features_worker, a): a[0]
+                       for a in worker_args}
+            for future in as_completed(futures):
+                result, reason = future.result()
+                completed += 1
+                if result is None:
+                    skipped += 1
+                    print(f"  SKIP: {reason}", flush=True)
+                else:
+                    X, y = result
+                    all_X.append(X)
+                    all_y.append(y)
+                    processed += 1
+                if completed % 50 == 0 or completed == len(pdb_ids):
+                    print(f"  Feature extraction: {completed}/{len(pdb_ids)} "
+                          f"(processed: {processed}, skipped: {skipped})", flush=True)
 
-        X = extract_features_for_protein(protein, tables)
-        if X is None:
-            skipped += 1
-            continue
+        print(f"  Processed: {processed}, Skipped: {skipped}", flush=True)
 
-        # Create labels: 1 for CP sites, 0 for all others
-        y = np.zeros(protein.n_residues)
-        for site in info["sites"]:
-            try:
-                idx = protein.residue_numbers.index(site)
-                y[idx] = 1.0
-            except ValueError:
-                pass
+        if not all_X:
+            print("ERROR: No training data extracted!")
+            sys.exit(1)
 
-        all_X.append(X)
-        all_y.append(y)
-        processed += 1
+        X_train = np.vstack(all_X)
+        y_train = np.concatenate(all_y)
+        np.savez(cache_path, X=X_train, y=y_train)
+        print(f"  Cached features to {cache_path}")
 
-        if (i + 1) % 50 == 0 or (i + 1) == len(pdb_ids):
-            print(f"  Feature extraction: {i+1}/{len(pdb_ids)} "
-                  f"(processed: {processed}, skipped: {skipped})", flush=True)
-
-    print(f"  Processed: {processed}, Skipped: {skipped}", flush=True)
-
-    if not all_X:
-        print("ERROR: No training data extracted!")
-        sys.exit(1)
-
-    X_train = np.vstack(all_X)
-    y_train = np.concatenate(all_y)
     n_pos = int(y_train.sum())
     n_neg = len(y_train) - n_pos
     print(f"\n  Training matrix: {X_train.shape}")
     print(f"  Positive (CP sites): {n_pos}")
     print(f"  Negative (non-CP): {n_neg}")
     print(f"  Ratio: 1:{n_neg // max(n_pos, 1)}")
-
-    # Cache features for future use
-    cache_path = args.data_dir / "features_cache.npz"
-    np.savez(cache_path, X=X_train, y=y_train)
-    print(f"  Cached features to {cache_path}")
 
     # =========================================================
     # Step 5: Cross-validation (optional)

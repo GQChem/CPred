@@ -221,24 +221,85 @@ def _batch_permutation_test_cpu(
     n_permutations: int = 1000,
     rng: np.random.Generator | None = None,
 ) -> dict[str, float]:
-    """CPU fallback: run permutation test element-by-element with progress."""
+    """CPU vectorised batch permutation test using numpy.
+
+    Encodes all elements as integers, generates all permutations at once,
+    and computes p-values for every element in a single numpy pass —
+    avoiding the per-element Python loop that made this take days.
+    """
     if rng is None:
         rng = np.random.default_rng(42)
 
+    n_exp = len(experimental)
+    n_comp = len(comparison)
+    n_total = n_exp + n_comp
+    n_elements = len(all_elements)
+
     fe_freq = compute_frequencies(experimental)
     fc_freq = compute_frequencies(comparison)
-    total = len(all_elements)
-    pvals = {}
 
-    for idx, elem in enumerate(all_elements, 1):
-        pval = permutation_test(experimental, comparison, elem, n_permutations, rng)
-        pvals[elem] = pval
-        sys.stdout.write(f"\r    Element {idx}/{total}: '{elem}' (p={pval:.3f})")
-        sys.stdout.flush()
+    # Encode combined list as integer IDs
+    elem_to_id = {e: i for i, e in enumerate(all_elements)}
+    combined_ids = np.array(
+        [elem_to_id[c] for c in experimental + comparison], dtype=np.int32
+    )
 
-    sys.stdout.write("\n")
-    sys.stdout.flush()
-    return pvals
+    # observed |fe - fc| per element
+    observed_diffs = np.array(
+        [abs(fe_freq.get(e, 0.0) - fc_freq.get(e, 0.0)) for e in all_elements],
+        dtype=np.float64,
+    )
+
+    # Count of each element in the combined list (for fc computation)
+    total_counts = np.array(
+        [(combined_ids == i).sum() for i in range(n_elements)], dtype=np.float64
+    )
+
+    # Generate all permutation indices: (n_permutations, n_total)
+    # Only the first n_exp columns are needed (the "experimental" split)
+    print(f"    CPU: generating {n_permutations} permutations of {n_total} elements...",
+          flush=True)
+    perm_indices = np.empty((n_permutations, n_exp), dtype=np.int32)
+    for p in range(n_permutations):
+        perm_indices[p] = rng.permutation(n_total)[:n_exp]
+
+    # Process elements in batches to keep memory reasonable
+    element_batch_size = 512
+    count_extreme = np.zeros(n_elements, dtype=np.int64)
+
+    for batch_start in range(0, n_elements, element_batch_size):
+        batch_end = min(batch_start + element_batch_size, n_elements)
+
+        # Build mask for this batch: (batch_size, n_total)
+        batch_ids = np.arange(batch_start, batch_end, dtype=np.int32)
+        masks = (combined_ids[np.newaxis, :] == batch_ids[:, np.newaxis])  # (batch, n_total)
+
+        obs_diff_batch = observed_diffs[batch_start:batch_end]  # (batch,)
+        total_counts_batch = total_counts[batch_start:batch_end]  # (batch,)
+
+        # For each permutation, count experimental hits per element:
+        # perm_indices: (n_perms, n_exp)
+        # masks[:, perm_indices]: (batch, n_perms, n_exp) -- too large, do in perm chunks
+        perm_batch_size = 200
+        for pstart in range(0, n_permutations, perm_batch_size):
+            pend = min(pstart + perm_batch_size, n_permutations)
+            p_idx = perm_indices[pstart:pend]  # (n_p, n_exp)
+
+            # masks[:, p_idx] -> (batch, n_p, n_exp)
+            exp_counts = masks[:, p_idx].sum(axis=2).astype(np.float64)  # (batch, n_p)
+
+            perm_fe = exp_counts / n_exp
+            perm_fc = (total_counts_batch[:, np.newaxis] - exp_counts) / n_comp
+            perm_diff = np.abs(perm_fe - perm_fc)  # (batch, n_p)
+
+            count_extreme[batch_start:batch_end] += (
+                perm_diff >= obs_diff_batch[:, np.newaxis]
+            ).sum(axis=1)
+
+        print(f"    CPU: processed elements {batch_end}/{n_elements}", flush=True)
+
+    pvals_arr = count_extreme / n_permutations
+    return {elem: pvals_arr[i] for i, elem in enumerate(all_elements)}
 
 
 def build_propensity_table(experimental_elements: list[str],
