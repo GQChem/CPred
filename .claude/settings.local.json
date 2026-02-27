@@ -19,7 +19,8 @@
       "Bash(mkdir:*)",
       "Bash(python:*)",
       "Bash(pip install:*)",
-      "Bash(tasklist:*)"
+      "Bash(tasklist:*)",
+      "Bash(git:*)"
     ]
   }
 }
