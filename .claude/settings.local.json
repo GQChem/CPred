@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:pmc.ncbi.nlm.nih.gov)",
+      "WebFetch(domain:10.life.nctu.edu.tw)",
+      "WebFetch(domain:journals.plos.org)",
+      "WebFetch(domain:academic.oup.com)",
+      "WebFetch(domain:sarst.life.nthu.edu.tw)",
+      "WebFetch(domain:agknapp.chemie.fu-berlin.de)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:doi.org)",
+      "WebFetch(domain:dx.plos.org)",
+      "WebFetch(domain:storage.googleapis.com)",
+      "WebFetch(domain:140.113.120.231)",
+      "WebFetch(domain:bmcbioinformatics.biomedcentral.com)",
+      "WebFetch(domain:www.semanticscholar.org)",
+      "WebFetch(domain:www.researchgate.net)",
+      "Bash(mkdir:*)",
+      "Bash(python:*)",
+      "Bash(pip install:*)",
+      "Bash(tasklist:*)"
+    ]
+  }
+}

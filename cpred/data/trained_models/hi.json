@@ -1,0 +1,93 @@
+{
+  "tree": {
+    "groups": {
+      "seq_propensity": {
+        "features": [
+          "prop_aa",
+          "prop_di",
+          "prop_oligo"
+        ],
+        "weight": 1.0
+      },
+      "ss_propensity": {
+        "features": [
+          "prop_dssp",
+          "prop_rama",
+          "prop_kappa_alpha"
+        ],
+        "weight": 0.5
+      },
+      "tertiary_packing": {
+        "features": [
+          "rsa",
+          "cn",
+          "wcn",
+          "cm",
+          "depth",
+          "bfactor",
+          "hbond"
+        ],
+        "weight": 1.0
+      },
+      "contact_network": {
+        "features": [
+          "closeness",
+          "farness_buried",
+          "farness_hydrophobic",
+          "farness_sum",
+          "farness_product"
+        ],
+        "weight": 0.5
+      },
+      "dynamics": {
+        "features": [
+          "gnm_msf"
+        ],
+        "weight": 1.0
+      }
+    },
+    "category_weights": {
+      "cat_a": {
+        "groups": [
+          "seq_propensity"
+        ],
+        "weight": 1.5
+      },
+      "cat_b": {
+        "groups": [
+          "ss_propensity"
+        ],
+        "weight": 0.5
+      },
+      "cat_c": {
+        "groups": [
+          "tertiary_packing",
+          "contact_network",
+          "dynamics"
+        ],
+        "weight": 0.5
+      }
+    }
+  },
+  "feature_names": [
+    "prop_aa",
+    "prop_di",
+    "prop_oligo",
+    "prop_dssp",
+    "prop_rama",
+    "prop_kappa_alpha",
+    "rsa",
+    "cn",
+    "wcn",
+    "cm",
+    "depth",
+    "bfactor",
+    "hbond",
+    "closeness",
+    "farness_buried",
+    "farness_hydrophobic",
+    "farness_sum",
+    "farness_product",
+    "gnm_msf"
+  ]
+}
