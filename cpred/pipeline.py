@@ -2,13 +2,20 @@
 
 Orchestrates: PDB parsing -> feature extraction -> standardization -> prediction.
 
-The 46 features are organized into three categories:
+The 46 features are organized into three categories (per Lo et al. 2012):
   Category A (sequence propensity): 3 features × 7 window positions = 21
-  Category B (SS propensity):       3 features × 7 window positions = 21  (overlap with window)
-  Category C (tertiary structure):  windowed structural features
+  Category B (SS propensity):       3 features × 7 window positions = 21
+  Category C (tertiary structure):  4 window-averaged structural features = 4
 
-In practice, the paper uses 46 distinct features after window averaging.
-We assemble them as a flat feature vector per residue.
+Total: 21 + 21 + 4 = 46 features
+
+Category C structural features that are NOT window-expanded (window-averaged):
+  rsa, closeness, gnm_msf, bfactor  (4 features)
+
+Category C features that are kept as single per-residue values but are NOT
+included in the 46-feature set (used internally only):
+  cn, wcn, cm, depth, hbond, farness_buried, farness_hydrophobic,
+  farness_sum, farness_product
 """
 
 from __future__ import annotations
@@ -24,39 +31,53 @@ from cpred.features.contact_network import extract_contact_network_features
 from cpred.features.gnm import compute_gnm_fluctuation
 from cpred.features.sequence_propensity import extract_sequence_propensity_features
 from cpred.features.secondary_structure import extract_secondary_structure_features
-from cpred.features.window import window_average_dict, window_average
+from cpred.features.window import (
+    window_average_dict, window_average,
+    window_expand_dict, DEFAULT_WINDOW,
+)
 from cpred.features.standardization import standardize_features
 
-# Canonical feature order (46 features)
-FEATURE_NAMES = [
-    # Category A: sequence propensity (3)
-    "prop_aa", "prop_di", "prop_oligo",
-    # Category B: SS propensity (3)
-    "prop_dssp", "prop_rama", "prop_kappa_alpha",
-    # Category C: tertiary structure (7 base + 5 contact + 1 GNM = 13)
-    "rsa", "cn", "wcn", "cm", "depth", "bfactor", "hbond",
-    "closeness", "farness_buried", "farness_hydrophobic",
-    "farness_sum", "farness_product",
-    "gnm_msf",
-]
+# Window positions suffixes for expanded features
+_W = DEFAULT_WINDOW
+_SUFFIXES = []
+for j in range(2 * _W + 1):
+    offset = j - _W
+    if offset < 0:
+        _SUFFIXES.append(f"_m{abs(offset)}")
+    elif offset == 0:
+        _SUFFIXES.append("_0")
+    else:
+        _SUFFIXES.append(f"_p{offset}")
 
-# After window averaging of Cat C features, we get windowed versions
-# The total 46 features come from:
-# - 3 Cat A propensities (already window-context from lookup)
-# - 3 Cat B propensities (already window-context from lookup)
-# - 13 Cat C features (window averaged)
-# Plus additional window-position features to reach 46
-# We include individual window position values for key features
+# Category A base features (expanded to 21 = 3 × 7)
+_CAT_A_BASE = ["prop_aa", "prop_di", "prop_oligo"]
+CAT_A_FEATURES = [f"{base}{suf}" for base in _CAT_A_BASE for suf in _SUFFIXES]
 
-# For simplicity, we use 19 base features + window expansion
-# to approximate the 46-feature set from the paper
+# Category B base features (expanded to 21 = 3 × 7)
+_CAT_B_BASE = ["prop_dssp", "prop_rama", "prop_kappa_alpha"]
+CAT_B_FEATURES = [f"{base}{suf}" for base in _CAT_B_BASE for suf in _SUFFIXES]
 
-NUM_FEATURES = len(FEATURE_NAMES)  # 19 base features
+# Category C: window-averaged structural features (4 features)
+CAT_C_FEATURES = ["rsa", "closeness", "gnm_msf", "bfactor"]
+
+# Full 46-feature canonical order
+FEATURE_NAMES = CAT_A_FEATURES + CAT_B_FEATURES + CAT_C_FEATURES
+
+NUM_FEATURES = len(FEATURE_NAMES)  # 46
+
+# Feature groups for the HI model
+FEATURE_GROUPS = {
+    "seq_propensity": CAT_A_FEATURES,
+    "ss_propensity": CAT_B_FEATURES,
+    "tertiary_packing": ["rsa", "bfactor"],
+    "contact_network": ["closeness"],
+    "dynamics": ["gnm_msf"],
+}
 
 
 def extract_all_features(protein: ProteinStructure,
                          tables: PropensityTables) -> dict[str, np.ndarray]:
-    """Extract all features for a protein structure.
+    """Extract all 46 features for a protein structure.
 
     Args:
         protein: Parsed protein structure.
@@ -67,26 +88,28 @@ def extract_all_features(protein: ProteinStructure,
     """
     features = {}
 
-    # Category A: sequence propensity
+    # Category A: sequence propensity — window EXPAND to 21 features
     seq_feats = extract_sequence_propensity_features(protein.sequence, tables)
-    # Window-average the propensity features
-    seq_feats = window_average_dict(seq_feats)
-    features.update(seq_feats)
+    seq_expanded = window_expand_dict(seq_feats)
+    features.update(seq_expanded)
 
-    # Category B: SS propensity
+    # Category B: SS propensity — window EXPAND to 21 features
     ss_feats = extract_secondary_structure_features(protein, tables)
-    ss_feats = window_average_dict(ss_feats)
-    features.update(ss_feats)
+    ss_expanded = window_expand_dict(ss_feats)
+    features.update(ss_expanded)
 
-    # Category C: tertiary structure
+    # Category C: tertiary structure — window AVERAGE to single values
     tert_feats = extract_tertiary_features(protein)
     contact_feats = extract_contact_network_features(protein)
     gnm_msf = compute_gnm_fluctuation(protein.ca_coords)
 
-    # Combine Cat C features
     cat_c = {}
-    cat_c.update(tert_feats)
-    cat_c.update(contact_feats)
+    # Only keep the 4 Cat C features we use
+    for key in ["rsa", "bfactor"]:
+        if key in tert_feats:
+            cat_c[key] = tert_feats[key]
+    if "closeness" in contact_feats:
+        cat_c["closeness"] = contact_feats["closeness"]
     cat_c["gnm_msf"] = gnm_msf
 
     # Window average Cat C features
@@ -103,15 +126,14 @@ def build_feature_matrix(features: dict[str, np.ndarray]) -> np.ndarray:
         features: Dictionary of feature name -> (N,) arrays.
 
     Returns:
-        (N, F) feature matrix where F = number of features.
+        (N, 46) feature matrix.
     """
     ordered = []
+    n = next(len(v) for v in features.values())
     for name in FEATURE_NAMES:
         if name in features:
             ordered.append(features[name])
         else:
-            # Fill missing features with zeros
-            n = next(len(v) for v in features.values())
             ordered.append(np.zeros(n))
     return np.column_stack(ordered)
 
@@ -153,8 +175,6 @@ def predict_from_pdb(pdb_path: str | Path, chain_id: str = "A",
     if model is not None:
         probabilities = model.predict(X)
     else:
-        # Without trained model, return raw feature-based score
-        # Use mean of standardized features as a simple proxy
         probabilities = 1 / (1 + np.exp(-X.mean(axis=1)))
 
     viable = probabilities >= threshold

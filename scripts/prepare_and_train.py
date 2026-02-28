@@ -29,16 +29,11 @@ warnings.filterwarnings("ignore")
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from cpred.io.pdb_parser import parse_pdb, ProteinStructure
-from cpred.features.tertiary_structure import extract_tertiary_features
-from cpred.features.contact_network import extract_contact_network_features
-from cpred.features.gnm import compute_gnm_fluctuation
-from cpred.features.sequence_propensity import extract_sequence_propensity_features
-from cpred.features.secondary_structure import extract_secondary_structure_features
-from cpred.features.window import window_average_dict
+from cpred.features.structural_codes import assign_ramachandran_codes, assign_kappa_alpha_codes
 from cpred.features.standardization import standardize_features
 from cpred.propensity.tables import PropensityTables
 from cpred.propensity.scoring import build_propensity_table
-from cpred.pipeline import FEATURE_NAMES, build_feature_matrix
+from cpred.pipeline import FEATURE_NAMES, build_feature_matrix, extract_all_features
 from cpred.models.ensemble import CPredEnsemble
 from cpred.training.evaluate import compute_metrics, cross_validate
 
@@ -99,42 +94,21 @@ def _extract_features_worker(args):
 
 def extract_features_for_protein(protein: ProteinStructure,
                                   tables: PropensityTables) -> np.ndarray | None:
-    """Extract and standardize all features for one protein."""
+    """Extract and standardize all features for one protein.
+
+    Uses the pipeline's extract_all_features which produces 46 features
+    (window-expanded propensities + window-averaged structural features).
+    """
     try:
-        features = {}
-
-        # Category A
-        seq_feats = extract_sequence_propensity_features(protein.sequence, tables)
-        seq_feats = window_average_dict(seq_feats)
-        features.update(seq_feats)
-
-        # Category B
-        ss_feats = extract_secondary_structure_features(protein, tables)
-        ss_feats = window_average_dict(ss_feats)
-        features.update(ss_feats)
-
-        # Category C
-        tert_feats = extract_tertiary_features(protein)
-        contact_feats = extract_contact_network_features(protein)
-        gnm_msf = compute_gnm_fluctuation(protein.ca_coords)
-
-        cat_c = {}
-        cat_c.update(tert_feats)
-        cat_c.update(contact_feats)
-        cat_c["gnm_msf"] = gnm_msf
-        cat_c = window_average_dict(cat_c)
-        features.update(cat_c)
-
-        # Standardize
+        features = extract_all_features(protein, tables)
         features = standardize_features(features)
-
         return build_feature_matrix(features)
     except Exception as e:
         return None
 
 
 def _parse_one_protein(args):
-    """Worker: parse one PDB and return sequence/DSSP/CP-site data."""
+    """Worker: parse one PDB and return sequence/DSSP/structural codes/CP-site data."""
     pdb_id, info, pdb_path_str = args
     pdb_path = Path(pdb_path_str)
     if not pdb_path.exists():
@@ -147,11 +121,19 @@ def _parse_one_protein(args):
     seq = protein.sequence
     dssp = list(protein.dssp.ss) if protein.dssp is not None else None
 
+    # Structural codes for entire protein (comparison set)
+    rama_codes = None
+    if protein.dssp is not None:
+        rama_codes = assign_ramachandran_codes(protein.dssp.phi, protein.dssp.psi)
+    ka_codes = assign_kappa_alpha_codes(protein.ca_coords)
+
     # Build residue_number -> index map once (O(1) lookups)
     resnum_to_idx = {rn: i for i, rn in enumerate(protein.residue_numbers)}
 
     exp_aa = []
     exp_dssp = []
+    exp_rama = []
+    exp_ka = []
     for site in info["sites"]:
         idx = resnum_to_idx.get(site)
         if idx is None:
@@ -160,8 +142,11 @@ def _parse_one_protein(args):
             exp_aa.append(seq[pos])
             if dssp is not None:
                 exp_dssp.append(dssp[pos])
+            if rama_codes is not None:
+                exp_rama.append(rama_codes[pos])
+            exp_ka.append(ka_codes[pos])
 
-    return seq, dssp, exp_aa, exp_dssp
+    return seq, dssp, exp_aa, exp_dssp, rama_codes, ka_codes, exp_rama, exp_ka
 
 
 def _make_ngrams_numpy(chars: list[str], n: int,
@@ -202,6 +187,10 @@ def build_propensity_tables_from_data(proteins_data: dict,
     comp_aa = []
     exp_dssp = []
     comp_dssp = []
+    exp_rama = []
+    comp_rama = []
+    exp_ka = []
+    comp_ka = []
 
     n_workers = min(8, os.cpu_count() or 1)
     print(f"  Parsing {total_pdb} PDB files with {n_workers} workers...", flush=True)
@@ -213,12 +202,18 @@ def build_propensity_tables_from_data(proteins_data: dict,
             completed += 1
             if result is None:
                 continue
-            seq, dssp, p_exp_aa, p_exp_dssp = result
+            (seq, dssp, p_exp_aa, p_exp_dssp,
+             rama_codes, ka_codes, p_exp_rama, p_exp_ka) = result
             comp_aa.extend(seq)
             if dssp is not None:
                 comp_dssp.extend(dssp)
+            if rama_codes is not None:
+                comp_rama.extend(rama_codes)
+            comp_ka.extend(ka_codes)
             exp_aa.extend(p_exp_aa)
             exp_dssp.extend(p_exp_dssp)
+            exp_rama.extend(p_exp_rama)
+            exp_ka.extend(p_exp_ka)
             if completed % 50 == 0 or completed == total_pdb:
                 print(f"  Parsed {completed}/{total_pdb} proteins...", flush=True)
 
@@ -263,9 +258,29 @@ def build_propensity_tables_from_data(proteins_data: dict,
     else:
         pt.save("dssp", {ss: 0.0 for ss in "HBEGITSC"})
 
-    # Placeholder for rama and kappa_alpha (need structural codes from all proteins)
-    for name in ["ramachandran", "kappa_alpha"]:
-        pt.save(name, {chr(65+i): 0.0 for i in range(23)})
+    # Ramachandran propensity table
+    if exp_rama and comp_rama:
+        n_rama = len(set(exp_rama) | set(comp_rama))
+        print(f"  Building ramachandran table ({len(exp_rama)} exp, {len(comp_rama)} comp, "
+              f"{n_rama} unique elements)...", flush=True)
+        table = build_propensity_table(exp_rama, comp_rama, n_permutations=1000, use_gpu=use_gpu)
+        pt.save("ramachandran", table)
+        print(f"  -> ramachandran done: {len(table)} elements", flush=True)
+    else:
+        print("  WARNING: No Ramachandran codes available, using zeros")
+        pt.save("ramachandran", {chr(65+i): 0.0 for i in range(23)})
+
+    # Kappa-Alpha propensity table
+    if exp_ka and comp_ka:
+        n_ka = len(set(exp_ka) | set(comp_ka))
+        print(f"  Building kappa_alpha table ({len(exp_ka)} exp, {len(comp_ka)} comp, "
+              f"{n_ka} unique elements)...", flush=True)
+        table = build_propensity_table(exp_ka, comp_ka, n_permutations=1000, use_gpu=use_gpu)
+        pt.save("kappa_alpha", table)
+        print(f"  -> kappa_alpha done: {len(table)} elements", flush=True)
+    else:
+        print("  WARNING: No Kappa-Alpha codes available, using zeros")
+        pt.save("kappa_alpha", {chr(65+i): 0.0 for i in range(23)})
 
     pt.load()
     print("  Propensity tables built and saved.")
@@ -344,9 +359,24 @@ def main():
     use_gpu = not args.no_gpu
     required_tables = ["single_aa", "di_residue", "oligo_residue", "dssp",
                        "ramachandran", "kappa_alpha"]
-    missing = [t for t in required_tables
-               if not (args.tables_dir / f"{t}.json").exists()
-               or (args.tables_dir / f"{t}.json").stat().st_size < 10]
+
+    # Check if tables need rebuilding: missing, too small, or placeholder zeros
+    def _table_needs_rebuild(name):
+        path = args.tables_dir / f"{name}.json"
+        if not path.exists() or path.stat().st_size < 10:
+            return True
+        # Check for placeholder tables (all zeros)
+        import json
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            if all(v == 0.0 for v in data.values()):
+                return True
+        except Exception:
+            return True
+        return False
+
+    missing = [t for t in required_tables if _table_needs_rebuild(t)]
 
     if not missing:
         print("  All propensity tables already exist, loading from disk...")
@@ -354,6 +384,7 @@ def main():
         tables.load()
     else:
         print(f"  Missing or incomplete tables: {missing}")
+        # Rebuild ALL tables to ensure consistency
         tables = build_propensity_tables_from_data(proteins_data, pdb_dir, args.tables_dir,
                                                     use_gpu=use_gpu)
 
@@ -364,13 +395,24 @@ def main():
     print("STEP 4: Extracting features")
     print("=" * 60)
 
+    from cpred.pipeline import NUM_FEATURES
     cache_path = args.data_dir / "features_cache.npz"
+    cache_valid = False
     if cache_path.exists() and cache_path.stat().st_size > 100:
-        print(f"  Feature cache found, loading from {cache_path}...")
-        cached = np.load(cache_path)
-        X_train = cached["X"]
-        y_train = cached["y"]
-    else:
+        try:
+            cached = np.load(cache_path)
+            if cached["X"].shape[1] == NUM_FEATURES:
+                cache_valid = True
+                X_train = cached["X"]
+                y_train = cached["y"]
+                print(f"  Feature cache found ({NUM_FEATURES} features), loading from {cache_path}...")
+            else:
+                print(f"  Feature cache has {cached['X'].shape[1]} features, "
+                      f"expected {NUM_FEATURES}. Rebuilding...")
+        except Exception:
+            print(f"  Feature cache corrupted. Rebuilding...")
+
+    if not cache_valid:
         all_X = []
         all_y = []
         processed = 0
@@ -422,6 +464,26 @@ def main():
     print(f"  Ratio: 1:{n_neg // max(n_pos, 1)}")
 
     # =========================================================
+    # Step 4b: Downsample negatives to ~2.4:1 ratio (per paper)
+    # =========================================================
+    neg_ratio = 2.4
+    target_neg = int(n_pos * neg_ratio)
+    if target_neg < n_neg:
+        print(f"\n  Downsampling negatives: {n_neg} -> {target_neg} "
+              f"(ratio {neg_ratio}:1)")
+        rng = np.random.RandomState(42)
+        pos_idx = np.where(y_train == 1)[0]
+        neg_idx = np.where(y_train == 0)[0]
+        sampled_neg = rng.choice(neg_idx, size=target_neg, replace=False)
+        keep_idx = np.sort(np.concatenate([pos_idx, sampled_neg]))
+        X_train = X_train[keep_idx]
+        y_train = y_train[keep_idx]
+        n_pos = int(y_train.sum())
+        n_neg = len(y_train) - n_pos
+        print(f"  After sampling: {X_train.shape}")
+        print(f"  Positive: {n_pos}, Negative: {n_neg}, Ratio: 1:{n_neg / max(n_pos, 1):.1f}")
+
+    # =========================================================
     # Step 5: Cross-validation (optional)
     # =========================================================
     if not args.skip_cv:
@@ -452,9 +514,17 @@ def main():
     # Evaluate on training set
     train_probs = ensemble.predict(X_train)
     train_metrics = compute_metrics(y_train, train_probs)
-    print("\nTraining set metrics:")
+    print("\nEnsemble training set metrics:")
     for key, val in train_metrics.items():
         print(f"  {key}: {val:.4f}")
+
+    # Individual model metrics
+    individual = ensemble.predict_individual(X_train)
+    for model_name, probs in individual.items():
+        metrics = compute_metrics(y_train, probs)
+        print(f"\n  {model_name.upper()} metrics:")
+        for key, val in metrics.items():
+            print(f"    {key}: {val:.4f}")
 
     # Save models
     ensemble.save(args.output_dir)

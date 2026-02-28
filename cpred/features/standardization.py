@@ -12,11 +12,25 @@ from __future__ import annotations
 import numpy as np
 
 # Features where low value correlates with CP viability (need inversion)
-FEATURES_TO_INVERT = {
+# These are base names — expanded window variants (e.g. closeness_m3) also match.
+_INVERT_BASE = {
     "cn", "wcn", "closeness", "hbond",
     "farness_buried", "farness_hydrophobic", "farness_sum", "farness_product",
     "depth",
 }
+
+
+def _should_invert(name: str) -> bool:
+    """Check if a feature name (possibly window-expanded) should be inverted."""
+    if name in _INVERT_BASE:
+        return True
+    # Check base name for expanded features like "closeness_m3"
+    base = name.rsplit("_", 1)[0] if "_" in name else name
+    return base in _INVERT_BASE
+
+
+# Keep the old name for backward compat
+FEATURES_TO_INVERT = _INVERT_BASE
 
 
 def invert_features(features: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
@@ -32,7 +46,7 @@ def invert_features(features: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     """
     result = {}
     for name, vals in features.items():
-        if name in FEATURES_TO_INVERT:
+        if _should_invert(name):
             result[name] = -vals
         else:
             result[name] = vals.copy()

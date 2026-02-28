@@ -26,6 +26,7 @@ class CPredSVM:
                 C=C,
                 gamma=gamma,
                 probability=True,
+                class_weight="balanced",
                 random_state=42,
             )),
         ])

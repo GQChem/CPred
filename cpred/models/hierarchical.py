@@ -20,38 +20,48 @@ from pathlib import Path
 import numpy as np
 from sklearn.metrics import roc_auc_score
 
-# Default HI tree structure
-DEFAULT_TREE = {
-    "groups": {
-        "seq_propensity": {
-            "features": ["prop_aa", "prop_di", "prop_oligo"],
-            "weight": 1.0,
+def _build_default_tree(feature_names: list[str] | None = None) -> dict:
+    """Build default HI tree, auto-detecting expanded feature names."""
+    if feature_names is None:
+        feature_names = []
+
+    # Classify features into groups based on prefix
+    seq_features = [f for f in feature_names if f.startswith(("prop_aa", "prop_di", "prop_oligo"))]
+    ss_features = [f for f in feature_names if f.startswith(("prop_dssp", "prop_rama", "prop_kappa"))]
+    tert_features = [f for f in feature_names if f in ("rsa", "bfactor")]
+    contact_features = [f for f in feature_names if f in ("closeness",)]
+    dyn_features = [f for f in feature_names if f in ("gnm_msf",)]
+
+    # Fallback for old-style feature names
+    if not seq_features:
+        seq_features = ["prop_aa", "prop_di", "prop_oligo"]
+    if not ss_features:
+        ss_features = ["prop_dssp", "prop_rama", "prop_kappa_alpha"]
+    if not tert_features:
+        tert_features = ["rsa", "bfactor"]
+    if not contact_features:
+        contact_features = ["closeness"]
+    if not dyn_features:
+        dyn_features = ["gnm_msf"]
+
+    return {
+        "groups": {
+            "seq_propensity": {"features": seq_features, "weight": 1.0},
+            "ss_propensity": {"features": ss_features, "weight": 1.0},
+            "tertiary_packing": {"features": tert_features, "weight": 1.0},
+            "contact_network": {"features": contact_features, "weight": 1.0},
+            "dynamics": {"features": dyn_features, "weight": 1.0},
         },
-        "ss_propensity": {
-            "features": ["prop_dssp", "prop_rama", "prop_kappa_alpha"],
-            "weight": 1.0,
+        "category_weights": {
+            "cat_a": {"groups": ["seq_propensity"], "weight": 1.0},
+            "cat_b": {"groups": ["ss_propensity"], "weight": 1.0},
+            "cat_c": {"groups": ["tertiary_packing", "contact_network", "dynamics"],
+                      "weight": 1.0},
         },
-        "tertiary_packing": {
-            "features": ["rsa", "cn", "wcn", "cm", "depth", "bfactor", "hbond"],
-            "weight": 1.0,
-        },
-        "contact_network": {
-            "features": ["closeness", "farness_buried", "farness_hydrophobic",
-                         "farness_sum", "farness_product"],
-            "weight": 1.0,
-        },
-        "dynamics": {
-            "features": ["gnm_msf"],
-            "weight": 1.0,
-        },
-    },
-    "category_weights": {
-        "cat_a": {"groups": ["seq_propensity"], "weight": 1.0},
-        "cat_b": {"groups": ["ss_propensity"], "weight": 1.0},
-        "cat_c": {"groups": ["tertiary_packing", "contact_network", "dynamics"],
-                  "weight": 1.0},
-    },
-}
+    }
+
+
+DEFAULT_TREE = _build_default_tree()
 
 
 class CPredHierarchical:
@@ -59,8 +69,8 @@ class CPredHierarchical:
 
     def __init__(self, tree: dict | None = None,
                  feature_names: list[str] | None = None):
-        self.tree = tree or DEFAULT_TREE
         self.feature_names = feature_names or []
+        self.tree = tree or _build_default_tree(self.feature_names)
         self._fitted = False
 
     def _feature_index(self, name: str) -> int | None:
@@ -132,6 +142,7 @@ class CPredHierarchical:
         """
         if feature_names is not None:
             self.feature_names = feature_names
+            self.tree = _build_default_tree(self.feature_names)
 
         best_auc = 0
         best_weights = {}

@@ -19,6 +19,7 @@ class CPredRandomForest:
         self.model = RandomForestClassifier(
             n_estimators=n_estimators,
             criterion="entropy",
+            class_weight="balanced",
             random_state=random_state,
             n_jobs=-1,
         )

@@ -63,23 +63,37 @@ class CPredANN:
         """Train the ANN model."""
         self.n_features = X.shape[1]
 
+        # Compute class weights for imbalanced data
+        n_pos = max(y.sum(), 1)
+        n_neg = max(len(y) - n_pos, 1)
+        pos_weight = n_neg / n_pos
+
         if self._use_torch:
             self._model = CPredANNModule(self.n_features).to(self.device)
             optimizer = torch.optim.Adam(self._model.parameters(), lr=self.lr)
-            criterion = nn.BCELoss()
+
+            # Use per-sample weights to handle class imbalance
+            sample_weights = torch.where(
+                torch.FloatTensor(y) > 0.5,
+                torch.tensor(pos_weight, dtype=torch.float32),
+                torch.tensor(1.0, dtype=torch.float32),
+            ).to(self.device)
 
             X_t = torch.FloatTensor(X).to(self.device)
             y_t = torch.FloatTensor(y).to(self.device)
-            dataset = TensorDataset(X_t, y_t)
+            dataset = TensorDataset(X_t, y_t,
+                                    sample_weights)
             loader = DataLoader(dataset, batch_size=self.batch_size,
                                 shuffle=True)
 
             self._model.train()
             for _ in range(self.epochs):
-                for batch_X, batch_y in loader:
+                for batch_X, batch_y, batch_w in loader:
                     optimizer.zero_grad()
                     pred = self._model(batch_X)
-                    loss = criterion(pred, batch_y)
+                    # Weighted BCE loss
+                    loss = nn.functional.binary_cross_entropy(
+                        pred, batch_y, weight=batch_w)
                     loss.backward()
                     optimizer.step()
         else:
