@@ -395,66 +395,46 @@ def main():
     print("STEP 4: Extracting features")
     print("=" * 60)
 
-    from cpred.pipeline import NUM_FEATURES
-    cache_path = args.data_dir / "features_cache.npz"
-    cache_valid = False
-    if cache_path.exists() and cache_path.stat().st_size > 100:
-        try:
-            cached = np.load(cache_path)
-            if cached["X"].shape[1] == NUM_FEATURES:
-                cache_valid = True
-                X_train = cached["X"]
-                y_train = cached["y"]
-                print(f"  Feature cache found ({NUM_FEATURES} features), loading from {cache_path}...")
+    all_X = []
+    all_y = []
+    processed = 0
+    skipped = 0
+
+    pdb_ids = list(proteins_data.keys())
+    worker_args = [
+        (pdb_id, proteins_data[pdb_id], str(pdb_dir / f"{pdb_id}.pdb"), tables)
+        for pdb_id in pdb_ids
+    ]
+
+    n_workers = min(8, os.cpu_count() or 1)
+    print(f"  Extracting features with {n_workers} workers...", flush=True)
+    completed = 0
+    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        futures = {executor.submit(_extract_features_worker, a): a[0]
+                   for a in worker_args}
+        for future in as_completed(futures):
+            result, reason = future.result()
+            completed += 1
+            if result is None:
+                skipped += 1
+                print(f"  SKIP: {reason}", flush=True)
             else:
-                print(f"  Feature cache has {cached['X'].shape[1]} features, "
-                      f"expected {NUM_FEATURES}. Rebuilding...")
-        except Exception:
-            print(f"  Feature cache corrupted. Rebuilding...")
+                X, y = result
+                all_X.append(X)
+                all_y.append(y)
+                processed += 1
+            if completed % 50 == 0 or completed == len(pdb_ids):
+                print(f"  Feature extraction: {completed}/{len(pdb_ids)} "
+                      f"(processed: {processed}, skipped: {skipped})", flush=True)
 
-    if not cache_valid:
-        all_X = []
-        all_y = []
-        processed = 0
-        skipped = 0
+    print(f"  Processed: {processed}, Skipped: {skipped}", flush=True)
 
-        pdb_ids = list(proteins_data.keys())
-        worker_args = [
-            (pdb_id, proteins_data[pdb_id], str(pdb_dir / f"{pdb_id}.pdb"), tables)
-            for pdb_id in pdb_ids
-        ]
+    if not all_X:
+        print("ERROR: No training data extracted!")
+        sys.exit(1)
 
-        n_workers = min(8, os.cpu_count() or 1)
-        print(f"  Extracting features with {n_workers} workers...", flush=True)
-        completed = 0
-        with ProcessPoolExecutor(max_workers=n_workers) as executor:
-            futures = {executor.submit(_extract_features_worker, a): a[0]
-                       for a in worker_args}
-            for future in as_completed(futures):
-                result, reason = future.result()
-                completed += 1
-                if result is None:
-                    skipped += 1
-                    print(f"  SKIP: {reason}", flush=True)
-                else:
-                    X, y = result
-                    all_X.append(X)
-                    all_y.append(y)
-                    processed += 1
-                if completed % 50 == 0 or completed == len(pdb_ids):
-                    print(f"  Feature extraction: {completed}/{len(pdb_ids)} "
-                          f"(processed: {processed}, skipped: {skipped})", flush=True)
-
-        print(f"  Processed: {processed}, Skipped: {skipped}", flush=True)
-
-        if not all_X:
-            print("ERROR: No training data extracted!")
-            sys.exit(1)
-
-        X_train = np.vstack(all_X)
-        y_train = np.concatenate(all_y)
-        np.savez(cache_path, X=X_train, y=y_train)
-        print(f"  Cached features to {cache_path}")
+    X_train = np.vstack(all_X)
+    y_train = np.concatenate(all_y)
 
     n_pos = int(y_train.sum())
     n_neg = len(y_train) - n_pos

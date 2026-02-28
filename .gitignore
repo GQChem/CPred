@@ -1,2 +1,5 @@
-/data/pdb
+/data/pdb/
+/data/*.npz
+__pycache__/
+*.pyc
 .claude/settings.local.json
