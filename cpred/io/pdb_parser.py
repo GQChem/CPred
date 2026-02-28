@@ -69,7 +69,7 @@ def _get_standard_residues(chain: Chain) -> list[Residue]:
         if res.id[0] != " ":
             continue  # skip HETATMs
         resname = res.get_resname().strip()
-        if resname in AA3TO1:
+        if resname in AA3TO1 and "CA" in res:
             residues.append(res)
     return residues
 
@@ -93,9 +93,25 @@ def _get_heavy_atoms(residue: Residue) -> np.ndarray:
     return np.array(coords) if coords else np.empty((0, 3))
 
 
+def _ensure_dssp_env():
+    """Ensure LD_LIBRARY_PATH includes conda lib dir for mkdssp's libboost."""
+    import os, shutil
+    mkdssp = shutil.which("mkdssp")
+    if mkdssp is None:
+        return
+    conda_prefix = os.environ.get("CONDA_PREFIX", "")
+    if not conda_prefix:
+        return
+    conda_lib = os.path.join(conda_prefix, "lib")
+    ld_path = os.environ.get("LD_LIBRARY_PATH", "")
+    if conda_lib not in ld_path:
+        os.environ["LD_LIBRARY_PATH"] = f"{conda_lib}:{ld_path}" if ld_path else conda_lib
+
+
 def run_dssp(pdb_path: Path, model, chain_id: str,
              residues: list[Residue]) -> DSSPResult | None:
     """Run DSSP on structure and extract per-residue results."""
+    _ensure_dssp_env()
     try:
         dssp = DSSP(model, str(pdb_path), dssp="mkdssp")
     except Exception:
