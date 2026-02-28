@@ -94,8 +94,8 @@ def run_cv(X: np.ndarray, y: np.ndarray, n_folds: int = 10) -> None:
 
 
 def _print_summary(metrics_list: list[dict]) -> None:
-    for key in ["auc", "sensitivity", "specificity", "accuracy", "mcc"]:
-        values = [m[key] for m in metrics_list]
+    for key in ["auc", "sensitivity", "specificity", "accuracy", "mcc", "threshold"]:
+        values = [m.get(key, 0.5) for m in metrics_list]
         print(f"  {key:>13s}: {np.mean(values):.4f} +/- {np.std(values):.4f}")
 
 
@@ -106,6 +106,8 @@ def main():
                         default=Path("cpred/data/propensity_tables"))
     parser.add_argument("--no-gpu", action="store_true")
     parser.add_argument("--n-folds", type=int, default=10)
+    parser.add_argument("--n-permutations", type=int, default=99999,
+                        help="Number of permutations for propensity p-values (Lo et al. 2012)")
     parser.add_argument("--skip-download", action="store_true")
     args = parser.parse_args()
 
@@ -186,7 +188,8 @@ def main():
     else:
         print(f"  Missing or incomplete tables: {missing}")
         tables = build_propensity_tables_from_data(
-            proteins_s3, pdb_dir, args.tables_dir, use_gpu=use_gpu)
+            proteins_s3, pdb_dir, args.tables_dir, use_gpu=use_gpu,
+            n_permutations=args.n_permutations)
 
     # === Step 4: Extract features for Dataset T ===
     print("\n" + "=" * 60)

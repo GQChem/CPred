@@ -6,6 +6,9 @@ where hidden = round(sqrt(n_features * 1)) = round(sqrt(n_features))
 Trained with BCELoss, SGD optimizer (lr=0.5, momentum=0.1), 5000 iterations
 each picking one random sample (Lo et al. 2012).
 
+Multiple restarts (default 5) with different random seeds; the model with
+best training loss is kept.
+
 Falls back to a simple sklearn MLPClassifier if PyTorch is not available.
 """
 
@@ -47,11 +50,13 @@ class CPredANN:
     """ANN classifier for CP site prediction."""
 
     def __init__(self, n_features: int = 46, lr: float = 0.5,
-                 momentum: float = 0.1, n_iterations: int = 5000):
+                 momentum: float = 0.1, n_iterations: int = 5000,
+                 n_restarts: int = 5):
         self.n_features = n_features
         self.lr = lr
         self.momentum = momentum
         self.n_iterations = n_iterations
+        self.n_restarts = n_restarts
         self._fitted = False
         self._use_torch = HAS_TORCH
         self._model = None
@@ -62,33 +67,51 @@ class CPredANN:
                 "cuda" if torch.cuda.is_available() else "cpu")
             self._model = CPredANNModule(n_features).to(self.device)
 
-    def fit(self, X: np.ndarray, y: np.ndarray) -> None:
-        """Train the ANN model.
+    def _train_one(self, X_t: 'torch.Tensor', y_t: 'torch.Tensor',
+                   seed: int) -> tuple['CPredANNModule', float]:
+        """Train a single ANN with given seed. Returns (model, final_loss)."""
+        model = CPredANNModule(self.n_features).to(self.device)
+        optimizer = torch.optim.SGD(
+            model.parameters(), lr=self.lr, momentum=self.momentum)
 
-        Paper: 5000 iterations, each randomly selecting one known case.
-        """
+        n_samples = len(y_t)
+        rng = np.random.RandomState(seed)
+
+        model.train()
+        for _ in range(self.n_iterations):
+            idx = rng.randint(0, n_samples)
+            optimizer.zero_grad()
+            pred = model(X_t[idx:idx+1])
+            loss = nn.functional.binary_cross_entropy(pred, y_t[idx:idx+1])
+            loss.backward()
+            optimizer.step()
+
+        # Compute full training loss for model selection
+        model.eval()
+        with torch.no_grad():
+            all_pred = model(X_t)
+            full_loss = nn.functional.binary_cross_entropy(all_pred, y_t).item()
+
+        return model, full_loss
+
+    def fit(self, X: np.ndarray, y: np.ndarray) -> None:
+        """Train the ANN with multiple restarts, keep best."""
         self.n_features = X.shape[1]
 
         if self._use_torch:
-            self._model = CPredANNModule(self.n_features).to(self.device)
-            optimizer = torch.optim.SGD(
-                self._model.parameters(),
-                lr=self.lr, momentum=self.momentum)
-
             X_t = torch.FloatTensor(X).to(self.device)
             y_t = torch.FloatTensor(y).to(self.device)
-            n_samples = len(y)
 
-            self._model.train()
-            rng = np.random.RandomState(42)
-            for _ in range(self.n_iterations):
-                idx = rng.randint(0, n_samples)
-                optimizer.zero_grad()
-                pred = self._model(X_t[idx:idx+1])
-                loss = nn.functional.binary_cross_entropy(
-                    pred, y_t[idx:idx+1])
-                loss.backward()
-                optimizer.step()
+            best_model = None
+            best_loss = float('inf')
+
+            for restart in range(self.n_restarts):
+                model, loss = self._train_one(X_t, y_t, seed=42 + restart)
+                if loss < best_loss:
+                    best_loss = loss
+                    best_model = model
+
+            self._model = best_model
         else:
             from sklearn.neural_network import MLPClassifier
             hidden = max(round(math.sqrt(self.n_features)), 2)

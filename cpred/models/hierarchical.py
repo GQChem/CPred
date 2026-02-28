@@ -1,18 +1,18 @@
 """Hierarchical Inference (HI) model for CP site prediction.
 
-Tree-structured weighted feature averaging. Features are grouped into
+Tree-structured weighted feature combination. Features are grouped into
 categories, each category produces a sub-score, and sub-scores are
 combined via optimized weights.
 
 Tree structure (Lo et al. 2012, Figure 4):
-  Level 1: Feature groups (1dprop, 2dprop, solacc, awaycore, 3dprop)
+  Level 1: Individual feature weights within groups
   Level 2: Category scores (Cat A=sequence, Cat B=SS, Cat C=tertiary)
   Level 3: Final IF score (weighted average of category scores)
 
 Paper weights: 1dprop=0.14, 2dprop=0.57, 3dprop=0.29
                solacc=0.04, awaycore=0.61
 
-Weights are optimized via grid search on training AUC with 0.1 step resolution.
+Optimization uses coordinate descent over all weight levels for maximum AUC.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from pathlib import Path
 
 import numpy as np
 from sklearn.metrics import roc_auc_score
+
 
 def _build_default_tree(feature_names: list[str] | None = None) -> dict:
     """Build default HI tree, auto-detecting expanded feature names."""
@@ -48,11 +49,31 @@ def _build_default_tree(feature_names: list[str] | None = None) -> dict:
 
     return {
         "groups": {
-            "seq_propensity": {"features": seq_features, "weight": 0.14},
-            "ss_propensity": {"features": ss_features, "weight": 0.57},
-            "tertiary_packing": {"features": tert_features, "weight": 0.04},
-            "contact_network": {"features": contact_features, "weight": 0.61},
-            "dynamics": {"features": dyn_features, "weight": 0.29},
+            "seq_propensity": {
+                "features": seq_features,
+                "weight": 0.14,
+                "feature_weights": {f: 1.0 for f in seq_features},
+            },
+            "ss_propensity": {
+                "features": ss_features,
+                "weight": 0.57,
+                "feature_weights": {f: 1.0 for f in ss_features},
+            },
+            "tertiary_packing": {
+                "features": tert_features,
+                "weight": 0.04,
+                "feature_weights": {f: 1.0 for f in tert_features},
+            },
+            "contact_network": {
+                "features": contact_features,
+                "weight": 0.61,
+                "feature_weights": {f: 1.0 for f in contact_features},
+            },
+            "dynamics": {
+                "features": dyn_features,
+                "weight": 0.29,
+                "feature_weights": {f: 1.0 for f in dyn_features},
+            },
         },
         "category_weights": {
             "cat_a": {"groups": ["seq_propensity"], "weight": 0.14},
@@ -83,21 +104,25 @@ class CPredHierarchical:
 
     def _compute_group_score(self, X: np.ndarray,
                              group: dict) -> np.ndarray:
-        """Compute average score for a feature group."""
+        """Compute weighted average score for a feature group."""
         indices = []
+        weights = []
+        feat_weights = group.get("feature_weights", {})
         for feat_name in group["features"]:
             idx = self._feature_index(feat_name)
             if idx is not None:
                 indices.append(idx)
+                weights.append(feat_weights.get(feat_name, 1.0))
         if not indices:
             return np.zeros(X.shape[0])
-        return X[:, indices].mean(axis=1)
+        w = np.array(weights)
+        total_w = w.sum()
+        if total_w < 1e-10:
+            return np.zeros(X.shape[0])
+        return (X[:, indices] * w[np.newaxis, :]).sum(axis=1) / total_w
 
     def predict_raw(self, X: np.ndarray) -> np.ndarray:
-        """Compute raw HI score (before sigmoid).
-
-        Weighted average of group scores following tree structure.
-        """
+        """Compute raw HI score (before sigmoid)."""
         groups = self.tree["groups"]
         group_scores = {}
         for gname, gconf in groups.items():
@@ -129,59 +154,84 @@ class CPredHierarchical:
         raw = self.predict_raw(X)
         return 1 / (1 + np.exp(-raw))
 
-    def fit(self, X: np.ndarray, y: np.ndarray,
-            feature_names: list[str] | None = None) -> None:
-        """Optimize tree weights via grid search on training AUC.
+    def _eval_auc(self, X: np.ndarray, y: np.ndarray) -> float:
+        """Helper to compute AUC with current weights."""
+        probs = self.predict(X)
+        try:
+            return roc_auc_score(y, probs)
+        except ValueError:
+            return 0.0
 
-        Uses 0.1 step resolution for finer weight optimization.
+    def fit(self, X: np.ndarray, y: np.ndarray,
+            feature_names: list[str] | None = None,
+            n_cd_rounds: int = 3) -> None:
+        """Optimize tree weights via coordinate descent on training AUC.
+
+        Three-level optimization:
+        1. Category weights (coarse grid search)
+        2. Group weights (coordinate descent)
+        3. Per-feature weights within groups (coordinate descent)
+
+        Repeats n_cd_rounds times for convergence.
         """
         if feature_names is not None:
             self.feature_names = feature_names
             self.tree = _build_default_tree(self.feature_names)
 
-        best_auc = 0
-        best_weights = {}
-
-        # Grid search over category weights (0.1 step resolution)
-        weight_options = [round(x * 0.1, 1) for x in range(1, 21)]  # 0.1 to 2.0
         cat_names = list(self.tree.get("category_weights", {}).keys())
-
         if not cat_names:
             self._fitted = True
             return
 
-        for weights in product(weight_options, repeat=len(cat_names)):
-            for cname, w in zip(cat_names, weights):
+        # Weight options for different levels
+        cat_weight_options = [round(x * 0.1, 1) for x in range(1, 21)]  # 0.1-2.0
+        group_weight_options = [round(x * 0.1, 1) for x in range(1, 21)]
+        feat_weight_options = [0.0, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0]
+
+        for cd_round in range(n_cd_rounds):
+            # --- Level 1: Category weight grid search ---
+            best_auc = 0
+            best_cat_weights = {}
+            for weights in product(cat_weight_options, repeat=len(cat_names)):
+                for cname, w in zip(cat_names, weights):
+                    self.tree["category_weights"][cname]["weight"] = w
+                auc = self._eval_auc(X, y)
+                if auc > best_auc:
+                    best_auc = auc
+                    best_cat_weights = {cn: w for cn, w in zip(cat_names, weights)}
+
+            for cname, w in best_cat_weights.items():
                 self.tree["category_weights"][cname]["weight"] = w
 
-            probs = self.predict(X)
-            try:
-                auc = roc_auc_score(y, probs)
-            except ValueError:
-                continue
+            # --- Level 2: Group weight coordinate descent ---
+            for gname in self.tree["groups"]:
+                best_gw = self.tree["groups"][gname]["weight"]
+                best_g_auc = self._eval_auc(X, y)
+                for gw in group_weight_options:
+                    self.tree["groups"][gname]["weight"] = gw
+                    auc = self._eval_auc(X, y)
+                    if auc > best_g_auc:
+                        best_g_auc = auc
+                        best_gw = gw
+                self.tree["groups"][gname]["weight"] = best_gw
 
-            if auc > best_auc:
-                best_auc = auc
-                best_weights = {cname: w for cname, w in zip(cat_names, weights)}
-
-        for cname, w in best_weights.items():
-            self.tree["category_weights"][cname]["weight"] = w
-
-        # Optimize group weights within each category
-        for gname in self.tree["groups"]:
-            best_gw = self.tree["groups"][gname]["weight"]
-            best_g_auc = 0
-            for gw in weight_options:
-                self.tree["groups"][gname]["weight"] = gw
-                probs = self.predict(X)
-                try:
-                    auc = roc_auc_score(y, probs)
-                except ValueError:
-                    continue
-                if auc > best_g_auc:
-                    best_g_auc = auc
-                    best_gw = gw
-            self.tree["groups"][gname]["weight"] = best_gw
+            # --- Level 3: Per-feature weight coordinate descent ---
+            for gname, gconf in self.tree["groups"].items():
+                feat_weights = gconf.get("feature_weights", {})
+                if len(feat_weights) <= 1:
+                    continue  # nothing to optimize for single-feature groups
+                for fname in gconf["features"]:
+                    if fname not in feat_weights:
+                        continue
+                    best_fw = feat_weights[fname]
+                    best_f_auc = self._eval_auc(X, y)
+                    for fw in feat_weight_options:
+                        feat_weights[fname] = fw
+                        auc = self._eval_auc(X, y)
+                        if auc > best_f_auc:
+                            best_f_auc = auc
+                            best_fw = fw
+                    feat_weights[fname] = best_fw
 
         self._fitted = True
 

@@ -226,7 +226,8 @@ def _make_ngrams_numpy(chars: list[str], n: int,
 def build_propensity_tables_from_data(proteins_data: dict,
                                        pdb_dir: Path,
                                        tables_dir: Path,
-                                       use_gpu: bool = True) -> PropensityTables:
+                                       use_gpu: bool = True,
+                                       n_permutations: int = 99999) -> PropensityTables:
     """Build propensity tables from experimental CP sites vs whole sequences.
 
     Uses Dataset S3 (nrCPDB-40) for propensity table construction per paper.
@@ -279,7 +280,7 @@ def build_propensity_tables_from_data(proteins_data: dict,
     if exp_aa and comp_aa:
         print(f"  Building single_aa table ({len(exp_aa)} exp, {len(comp_aa)} comp)...",
               flush=True)
-        table = build_propensity_table(exp_aa, comp_aa, n_permutations=1000, use_gpu=use_gpu)
+        table = build_propensity_table(exp_aa, comp_aa, n_permutations=n_permutations, use_gpu=use_gpu)
         pt.save("single_aa", table)
         print(f"  -> single_aa done: {len(table)} elements", flush=True)
 
@@ -288,7 +289,7 @@ def build_propensity_tables_from_data(proteins_data: dict,
         n_di = len(set(exp_di) | set(comp_di))
         print(f"  Building di_residue table ({len(exp_di)} exp, {len(comp_di)} comp, "
               f"{n_di} unique elements)...", flush=True)
-        table = build_propensity_table(exp_di, comp_di, n_permutations=1000, use_gpu=use_gpu)
+        table = build_propensity_table(exp_di, comp_di, n_permutations=n_permutations, use_gpu=use_gpu)
         pt.save("di_residue", table)
         print(f"  -> di_residue done: {len(table)} elements", flush=True)
 
@@ -297,7 +298,7 @@ def build_propensity_tables_from_data(proteins_data: dict,
         n_oligo = len(set(exp_oligo) | set(comp_oligo))
         print(f"  Building oligo_residue table ({len(exp_oligo)} exp, {len(comp_oligo)} comp, "
               f"{n_oligo} unique elements)...", flush=True)
-        table = build_propensity_table(exp_oligo, comp_oligo, n_permutations=1000, use_gpu=use_gpu)
+        table = build_propensity_table(exp_oligo, comp_oligo, n_permutations=n_permutations, use_gpu=use_gpu)
         pt.save("oligo_residue", table)
         print(f"  -> oligo_residue done: {len(table)} elements", flush=True)
     else:
@@ -308,7 +309,7 @@ def build_propensity_tables_from_data(proteins_data: dict,
         n_dssp = len(set(exp_dssp) | set(comp_dssp))
         print(f"  Building DSSP table ({len(exp_dssp)} exp, {len(comp_dssp)} comp, "
               f"{n_dssp} unique elements)...", flush=True)
-        table = build_propensity_table(exp_dssp, comp_dssp, n_permutations=1000, use_gpu=use_gpu)
+        table = build_propensity_table(exp_dssp, comp_dssp, n_permutations=n_permutations, use_gpu=use_gpu)
         pt.save("dssp", table)
     else:
         pt.save("dssp", {ss: 0.0 for ss in "HBEGITSC"})
@@ -317,7 +318,7 @@ def build_propensity_tables_from_data(proteins_data: dict,
         n_rama = len(set(exp_rama) | set(comp_rama))
         print(f"  Building ramachandran table ({len(exp_rama)} exp, {len(comp_rama)} comp, "
               f"{n_rama} unique elements)...", flush=True)
-        table = build_propensity_table(exp_rama, comp_rama, n_permutations=1000, use_gpu=use_gpu)
+        table = build_propensity_table(exp_rama, comp_rama, n_permutations=n_permutations, use_gpu=use_gpu)
         pt.save("ramachandran", table)
         print(f"  -> ramachandran done: {len(table)} elements", flush=True)
     else:
@@ -328,7 +329,7 @@ def build_propensity_tables_from_data(proteins_data: dict,
         n_ka = len(set(exp_ka) | set(comp_ka))
         print(f"  Building kappa_alpha table ({len(exp_ka)} exp, {len(comp_ka)} comp, "
               f"{n_ka} unique elements)...", flush=True)
-        table = build_propensity_table(exp_ka, comp_ka, n_permutations=1000, use_gpu=use_gpu)
+        table = build_propensity_table(exp_ka, comp_ka, n_permutations=n_permutations, use_gpu=use_gpu)
         pt.save("kappa_alpha", table)
         print(f"  -> kappa_alpha done: {len(table)} elements", flush=True)
     else:
@@ -350,6 +351,8 @@ def main():
     parser.add_argument("--skip-download", action="store_true")
     parser.add_argument("--no-gpu", action="store_true",
                         help="Disable GPU acceleration for permutation tests")
+    parser.add_argument("--n-permutations", type=int, default=99999,
+                        help="Number of permutations for propensity p-values (Lo et al. 2012)")
     parser.add_argument("--batch-size", type=int, default=50,
                         help="Process proteins in batches")
     args = parser.parse_args()
@@ -455,7 +458,8 @@ def main():
     else:
         print(f"  Missing or incomplete tables: {missing}")
         tables = build_propensity_tables_from_data(proteins_s3, pdb_dir, args.tables_dir,
-                                                    use_gpu=use_gpu)
+                                                    use_gpu=use_gpu,
+                                                    n_permutations=args.n_permutations)
 
     # =========================================================
     # Step 4: Extract features for Dataset T proteins only

@@ -14,18 +14,47 @@ from sklearn.metrics import (
 from sklearn.model_selection import StratifiedKFold
 
 
+def find_optimal_threshold(y_true: np.ndarray, y_prob: np.ndarray) -> float:
+    """Find the threshold that maximizes Youden's J statistic (Sens + Spec - 1).
+
+    This is equivalent to the point on the ROC curve furthest from the diagonal.
+    """
+    thresholds = np.unique(y_prob)
+    # Add boundary values
+    thresholds = np.concatenate([[0.0], thresholds, [1.0]])
+
+    best_j = -1.0
+    best_t = 0.5
+
+    for t in thresholds:
+        y_pred = (y_prob >= t).astype(int)
+        tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
+        sens = tp / max(tp + fn, 1)
+        spec = tn / max(tn + fp, 1)
+        j = sens + spec - 1
+        if j > best_j:
+            best_j = j
+            best_t = t
+
+    return float(best_t)
+
+
 def compute_metrics(y_true: np.ndarray, y_prob: np.ndarray,
-                    threshold: float = 0.5) -> dict[str, float]:
+                    threshold: float | None = None) -> dict[str, float]:
     """Compute evaluation metrics.
 
     Args:
         y_true: (N,) true binary labels.
         y_prob: (N,) predicted probabilities.
-        threshold: Classification threshold.
+        threshold: Classification threshold. If None, uses optimal threshold
+                   (maximizing Youden's J = Sens + Spec - 1).
 
     Returns:
-        Dict with AUC, sensitivity, specificity, MCC, accuracy.
+        Dict with AUC, sensitivity, specificity, MCC, accuracy, threshold.
     """
+    if threshold is None:
+        threshold = find_optimal_threshold(y_true, y_prob)
+
     y_pred = (y_prob >= threshold).astype(int)
 
     try:
@@ -50,6 +79,7 @@ def compute_metrics(y_true: np.ndarray, y_prob: np.ndarray,
         "specificity": specificity,
         "accuracy": accuracy,
         "mcc": mcc,
+        "threshold": threshold,
     }
 
 

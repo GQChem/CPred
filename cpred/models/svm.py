@@ -32,8 +32,8 @@ class CPredSVM:
         """Train the SVM model, optionally with grid search."""
         if grid_search:
             param_grid = {
-                "C": [0.1, 1.0, 10.0, 100.0],
-                "gamma": ["scale", "auto", 0.01, 0.1],
+                "C": [0.01, 0.1, 0.5, 1.0, 5.0, 10.0, 50.0, 100.0],
+                "gamma": ["scale", "auto", 0.001, 0.005, 0.01, 0.05, 0.1, 0.5],
             }
             gs = GridSearchCV(
                 self.model, param_grid,
