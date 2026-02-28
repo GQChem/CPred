@@ -7,7 +7,7 @@
           "prop_di",
           "prop_oligo"
         ],
-        "weight": 1.0
+        "weight": 2.0
       },
       "ss_propensity": {
         "features": [
@@ -27,7 +27,7 @@
           "bfactor",
           "hbond"
         ],
-        "weight": 1.0
+        "weight": 0.5
       },
       "contact_network": {
         "features": [
@@ -43,7 +43,7 @@
         "features": [
           "gnm_msf"
         ],
-        "weight": 1.0
+        "weight": 0.5
       }
     },
     "category_weights": {
@@ -51,7 +51,7 @@
         "groups": [
           "seq_propensity"
         ],
-        "weight": 1.5
+        "weight": 2.0
       },
       "cat_b": {
         "groups": [

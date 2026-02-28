@@ -1,0 +1,16 @@
+Metadata-Version: 2.4
+Name: cpred
+Version: 0.1.0
+Summary: Prediction of viable circular permutation cleavage sites in proteins
+Requires-Python: >=3.10
+Requires-Dist: biopython>=1.82
+Requires-Dist: numpy>=1.24
+Requires-Dist: scipy>=1.11
+Requires-Dist: scikit-learn>=1.3
+Requires-Dist: torch>=2.0
+Requires-Dist: networkx>=3.1
+Requires-Dist: pandas>=2.0
+Requires-Dist: requests>=2.31
+Provides-Extra: dev
+Requires-Dist: pytest>=7.4; extra == "dev"
+Requires-Dist: pytest-cov; extra == "dev"
