@@ -1,13 +1,17 @@
 """Artificial Neural Network model for CP site prediction.
 
-3-layer ANN: Linear(46, 23) -> Sigmoid -> Linear(23, 1) -> Sigmoid
-Trained with BCELoss and Adam optimizer.
+3-layer ANN: Linear(n_features, hidden) -> Sigmoid -> Linear(hidden, 1) -> Sigmoid
+where hidden = round(sqrt(n_features * 1)) = round(sqrt(n_features))
+
+Trained with BCELoss, SGD optimizer (lr=0.5, momentum=0.1), 5000 iterations
+each picking one random sample (Lo et al. 2012).
 
 Falls back to a simple sklearn MLPClassifier if PyTorch is not available.
 """
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import numpy as np
@@ -15,7 +19,6 @@ import numpy as np
 try:
     import torch
     import torch.nn as nn
-    from torch.utils.data import DataLoader, TensorDataset
     HAS_TORCH = True
 except (ImportError, OSError):
     HAS_TORCH = False
@@ -24,11 +27,11 @@ except (ImportError, OSError):
 if HAS_TORCH:
 
     class CPredANNModule(nn.Module):
-        """PyTorch ANN module: F -> F//2 -> 1 with sigmoid activations."""
+        """PyTorch ANN module: F -> round(sqrt(F)) -> 1 with sigmoid activations."""
 
-        def __init__(self, n_features: int = 19):
+        def __init__(self, n_features: int = 46):
             super().__init__()
-            hidden = max(n_features // 2, 10)
+            hidden = max(round(math.sqrt(n_features)), 2)
             self.net = nn.Sequential(
                 nn.Linear(n_features, hidden),
                 nn.Sigmoid(),
@@ -43,12 +46,12 @@ if HAS_TORCH:
 class CPredANN:
     """ANN classifier for CP site prediction."""
 
-    def __init__(self, n_features: int = 19, lr: float = 0.001,
-                 epochs: int = 100, batch_size: int = 64):
+    def __init__(self, n_features: int = 46, lr: float = 0.5,
+                 momentum: float = 0.1, n_iterations: int = 5000):
         self.n_features = n_features
         self.lr = lr
-        self.epochs = epochs
-        self.batch_size = batch_size
+        self.momentum = momentum
+        self.n_iterations = n_iterations
         self._fitted = False
         self._use_torch = HAS_TORCH
         self._model = None
@@ -60,50 +63,39 @@ class CPredANN:
             self._model = CPredANNModule(n_features).to(self.device)
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> None:
-        """Train the ANN model."""
-        self.n_features = X.shape[1]
+        """Train the ANN model.
 
-        # Compute class weights for imbalanced data
-        n_pos = max(y.sum(), 1)
-        n_neg = max(len(y) - n_pos, 1)
-        pos_weight = n_neg / n_pos
+        Paper: 5000 iterations, each randomly selecting one known case.
+        """
+        self.n_features = X.shape[1]
 
         if self._use_torch:
             self._model = CPredANNModule(self.n_features).to(self.device)
-            optimizer = torch.optim.Adam(self._model.parameters(), lr=self.lr)
-
-            # Use per-sample weights to handle class imbalance
-            sample_weights = torch.where(
-                torch.FloatTensor(y) > 0.5,
-                torch.tensor(pos_weight, dtype=torch.float32),
-                torch.tensor(1.0, dtype=torch.float32),
-            ).to(self.device)
+            optimizer = torch.optim.SGD(
+                self._model.parameters(),
+                lr=self.lr, momentum=self.momentum)
 
             X_t = torch.FloatTensor(X).to(self.device)
             y_t = torch.FloatTensor(y).to(self.device)
-            dataset = TensorDataset(X_t, y_t,
-                                    sample_weights)
-            loader = DataLoader(dataset, batch_size=self.batch_size,
-                                shuffle=True)
+            n_samples = len(y)
 
             self._model.train()
-            for _ in range(self.epochs):
-                for batch_X, batch_y, batch_w in loader:
-                    optimizer.zero_grad()
-                    pred = self._model(batch_X)
-                    # Weighted BCE loss
-                    loss = nn.functional.binary_cross_entropy(
-                        pred, batch_y, weight=batch_w)
-                    loss.backward()
-                    optimizer.step()
+            rng = np.random.RandomState(42)
+            for _ in range(self.n_iterations):
+                idx = rng.randint(0, n_samples)
+                optimizer.zero_grad()
+                pred = self._model(X_t[idx:idx+1])
+                loss = nn.functional.binary_cross_entropy(
+                    pred, y_t[idx:idx+1])
+                loss.backward()
+                optimizer.step()
         else:
-            # Fallback to sklearn MLP
             from sklearn.neural_network import MLPClassifier
-            hidden = max(self.n_features // 2, 10)
+            hidden = max(round(math.sqrt(self.n_features)), 2)
             self._sklearn_model = MLPClassifier(
                 hidden_layer_sizes=(hidden,),
                 activation="logistic",
-                max_iter=self.epochs,
+                max_iter=self.n_iterations,
                 random_state=42,
             )
             self._sklearn_model.fit(X, y)

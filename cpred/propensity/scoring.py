@@ -1,11 +1,15 @@
-"""Propensity scoring formula.
+"""Propensity scoring formula (Lo et al. 2012, eq 1.1-1.3).
 
-Sp(i) = ((fe(i) - fc(i)) / fc(i)) * (1 - p(i))
+Sp(i) = W(i) * ((fe(i) + fmin(i)) / (fc(i) + fmin(i)) - 1)
 
 where:
-  fe(i) = frequency of element i in experimental CP sites
-  fc(i) = frequency of element i in comparison set (whole proteins)
-  p(i)  = p-value from permutation test
+  fe(i)   = frequency of element i in experimental CP sites
+  fc(i)   = frequency of element i in comparison set (whole proteins)
+  fmin(i) = (1/ne + 1/nc) / 2  (smoothing term)
+  W(i)    = 1 - p(i)           (statistical weight)
+  ne      = total number of experimental elements
+  nc      = total number of comparison elements
+  p(i)    = p-value from permutation test
 
 Elements can be: single AA, di-residue, oligo-residue, DSSP state,
 Ramachandran code, or kappa-alpha code.
@@ -81,22 +85,28 @@ def permutation_test(experimental: list[str], comparison: list[str],
     return count_extreme / n_permutations
 
 
-def compute_propensity(fe: float, fc: float, pval: float) -> float:
-    """Compute propensity score for a single element.
+def compute_propensity(fe: float, fc: float, pval: float,
+                       n_exp: int = 1, n_comp: int = 1) -> float:
+    """Compute propensity score for a single element (eq 1.1-1.3).
 
-    Sp = ((fe - fc) / fc) * (1 - pval)
+    Sp = W(i) * ((fe + fmin) / (fc + fmin) - 1)
+    where fmin = (1/ne + 1/nc) / 2, W = 1 - pval
 
     Args:
         fe: Frequency in experimental (CP site) set.
         fc: Frequency in comparison (whole protein) set.
         pval: p-value from permutation test.
+        n_exp: Total number of experimental elements.
+        n_comp: Total number of comparison elements.
 
     Returns:
         Propensity score.
     """
-    if fc < 1e-10:
+    fmin = (1.0 / max(n_exp, 1) + 1.0 / max(n_comp, 1)) / 2.0
+    denom = fc + fmin
+    if denom < 1e-10:
         return 0.0
-    return ((fe - fc) / fc) * (1.0 - pval)
+    return (1.0 - pval) * ((fe + fmin) / denom - 1.0)
 
 
 # =========================================================================
@@ -374,7 +384,8 @@ def build_propensity_table(experimental_elements: list[str],
         for i, elem in enumerate(all_elements):
             fe = fe_freq.get(elem, 0.0)
             fc = fc_freq.get(elem, 0.0)
-            table[elem] = compute_propensity(fe, fc, float(pvals[i]))
+            table[elem] = compute_propensity(fe, fc, float(pvals[i]),
+                                             n_exp=n_exp, n_comp=n_comp)
 
         print(f"    GPU: done. Computed {total} propensity scores.", flush=True)
         return table
@@ -393,6 +404,7 @@ def build_propensity_table(experimental_elements: list[str],
     for elem in all_elements:
         fe = fe_freq.get(elem, 0.0)
         fc = fc_freq.get(elem, 0.0)
-        table[elem] = compute_propensity(fe, fc, pvals[elem])
+        table[elem] = compute_propensity(fe, fc, pvals[elem],
+                                         n_exp=n_exp, n_comp=n_comp)
 
     return table

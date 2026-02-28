@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Complete training pipeline: parse datasets -> download PDBs -> extract features -> train.
+"""Complete training pipeline: parse Dataset T -> download PDBs -> extract features -> train.
 
 This script:
-1. Parses Dataset S3 (experimental CP sites) to get PDB IDs + CP site positions
-2. Downloads PDB structures from RCSB
-3. Extracts features for each protein
-4. Builds propensity tables from the data
-5. Trains the ensemble model
-6. Evaluates via cross-validation
-7. Runs verification on DHFR (1RX4)
+1. Parses Dataset T (176 labeled CP sites from 6 proteins) for training
+2. Parses Dataset S3 (nrCPDB-40) for propensity table construction
+3. Downloads PDB structures from RCSB
+4. Builds propensity tables from Dataset S3
+5. Extracts features only for the 6 Dataset T proteins
+6. Trains the ensemble model on 176 labeled sites
+7. Evaluates on DHFR (1RX4) as independent test set
 """
 
 import argparse
@@ -67,6 +67,28 @@ def parse_dataset_s3(supp_dir: Path) -> dict:
     return dict(proteins)
 
 
+def parse_dataset_t(csv_path: Path) -> dict:
+    """Parse dataset_t.csv -> {pdb_id: {chain, sites_viable: [int], sites_inviable: [int]}}.
+
+    Returns one entry per unique PDB ID with lists of viable and inviable residue numbers.
+    """
+    df = pd.read_csv(csv_path)
+    proteins = {}
+    for _, row in df.iterrows():
+        pdb_id = row['pdb_id']
+        if pdb_id not in proteins:
+            proteins[pdb_id] = {
+                'chain': row['chain'],
+                'sites_viable': [],
+                'sites_inviable': [],
+            }
+        if row['viable'] == 1:
+            proteins[pdb_id]['sites_viable'].append(int(row['residue_number']))
+        else:
+            proteins[pdb_id]['sites_inviable'].append(int(row['residue_number']))
+    return proteins
+
+
 def _extract_features_worker(args):
     """Worker: parse PDB, extract features, return (X, y) or (None, reason)."""
     pdb_id, info, pdb_path_str, tables = args
@@ -84,7 +106,7 @@ def _extract_features_worker(args):
 
     resnum_to_idx = {rn: i for i, rn in enumerate(protein.residue_numbers)}
     y = np.zeros(protein.n_residues)
-    for site in info["sites"]:
+    for site in info.get("sites", []):
         idx = resnum_to_idx.get(site)
         if idx is not None:
             y[idx] = 1.0
@@ -92,13 +114,52 @@ def _extract_features_worker(args):
     return (X, y), None
 
 
+def _extract_features_dataset_t_worker(args):
+    """Worker: parse PDB, extract features for Dataset T labeled sites only.
+
+    Returns (X_labeled, y_labeled, pdb_id) where only the 176 labeled positions
+    are included.
+    """
+    pdb_id, info, pdb_path_str, tables = args
+    pdb_path = Path(pdb_path_str)
+    if not pdb_path.exists():
+        return None, f"{pdb_id}: PDB file not found"
+    try:
+        protein = parse_pdb(pdb_path, chain_id=info["chain"])
+    except Exception as e:
+        return None, f"{pdb_id}: parse error: {e}"
+
+    X = extract_features_for_protein(protein, tables)
+    if X is None:
+        return None, f"{pdb_id}: feature extraction failed"
+
+    resnum_to_idx = {rn: i for i, rn in enumerate(protein.residue_numbers)}
+
+    # Only keep labeled positions
+    labeled_indices = []
+    labels = []
+    for site in info.get("sites_viable", []):
+        idx = resnum_to_idx.get(site)
+        if idx is not None:
+            labeled_indices.append(idx)
+            labels.append(1.0)
+    for site in info.get("sites_inviable", []):
+        idx = resnum_to_idx.get(site)
+        if idx is not None:
+            labeled_indices.append(idx)
+            labels.append(0.0)
+
+    if not labeled_indices:
+        return None, f"{pdb_id}: no labeled sites found in structure"
+
+    X_labeled = X[labeled_indices]
+    y_labeled = np.array(labels)
+    return (X_labeled, y_labeled), None
+
+
 def extract_features_for_protein(protein: ProteinStructure,
                                   tables: PropensityTables) -> np.ndarray | None:
-    """Extract and standardize all features for one protein.
-
-    Uses the pipeline's extract_all_features which produces 46 features
-    (window-expanded propensities + window-averaged structural features).
-    """
+    """Extract and standardize all features for one protein."""
     try:
         features = extract_all_features(protein, tables)
         features = standardize_features(features)
@@ -121,13 +182,11 @@ def _parse_one_protein(args):
     seq = protein.sequence
     dssp = list(protein.dssp.ss) if protein.dssp is not None else None
 
-    # Structural codes for entire protein (comparison set)
     rama_codes = None
     if protein.dssp is not None:
         rama_codes = assign_ramachandran_codes(protein.dssp.phi, protein.dssp.psi)
     ka_codes = assign_kappa_alpha_codes(protein.ca_coords)
 
-    # Build residue_number -> index map once (O(1) lookups)
     resnum_to_idx = {rn: i for i, rn in enumerate(protein.residue_numbers)}
 
     exp_aa = []
@@ -151,15 +210,10 @@ def _parse_one_protein(args):
 
 def _make_ngrams_numpy(chars: list[str], n: int,
                        boundary_stride: int | None = None) -> list[str]:
-    """Fast n-gram construction via numpy char array.
-
-    boundary_stride: if set, skip positions where i % boundary_stride > boundary_stride - n
-    (used to avoid crossing window boundaries in exp_aa).
-    """
+    """Fast n-gram construction via numpy char array."""
     arr = np.array(list(chars), dtype="U1")
     if n == 1:
         return list(arr)
-    # Stack shifted views and join
     views = np.stack([arr[i: len(arr) - (n - 1 - i)] for i in range(n)], axis=1)
     grams = np.apply_along_axis(lambda r: "".join(r), 1, views)
     if boundary_stride is not None:
@@ -173,7 +227,10 @@ def build_propensity_tables_from_data(proteins_data: dict,
                                        pdb_dir: Path,
                                        tables_dir: Path,
                                        use_gpu: bool = True) -> PropensityTables:
-    """Build propensity tables from experimental CP sites vs whole sequences."""
+    """Build propensity tables from experimental CP sites vs whole sequences.
+
+    Uses Dataset S3 (nrCPDB-40) for propensity table construction per paper.
+    """
     print("Building propensity tables from training data...")
 
     pdb_ids_list = list(proteins_data.keys())
@@ -226,7 +283,6 @@ def build_propensity_tables_from_data(proteins_data: dict,
         pt.save("single_aa", table)
         print(f"  -> single_aa done: {len(table)} elements", flush=True)
 
-        # Di-residue — numpy n-gram construction
         exp_di = _make_ngrams_numpy(exp_aa, 2, boundary_stride=7)
         comp_di = _make_ngrams_numpy(comp_aa, 2)
         n_di = len(set(exp_di) | set(comp_di))
@@ -236,7 +292,6 @@ def build_propensity_tables_from_data(proteins_data: dict,
         pt.save("di_residue", table)
         print(f"  -> di_residue done: {len(table)} elements", flush=True)
 
-        # Oligo-residue — numpy n-gram construction
         exp_oligo = _make_ngrams_numpy(exp_aa, 3, boundary_stride=7)
         comp_oligo = _make_ngrams_numpy(comp_aa, 3)
         n_oligo = len(set(exp_oligo) | set(comp_oligo))
@@ -258,7 +313,6 @@ def build_propensity_tables_from_data(proteins_data: dict,
     else:
         pt.save("dssp", {ss: 0.0 for ss in "HBEGITSC"})
 
-    # Ramachandran propensity table
     if exp_rama and comp_rama:
         n_rama = len(set(exp_rama) | set(comp_rama))
         print(f"  Building ramachandran table ({len(exp_rama)} exp, {len(comp_rama)} comp, "
@@ -270,7 +324,6 @@ def build_propensity_tables_from_data(proteins_data: dict,
         print("  WARNING: No Ramachandran codes available, using zeros")
         pt.save("ramachandran", {chr(65+i): 0.0 for i in range(23)})
 
-    # Kappa-Alpha propensity table
     if exp_ka and comp_ka:
         n_ka = len(set(exp_ka) | set(comp_ka))
         print(f"  Building kappa_alpha table ({len(exp_ka)} exp, {len(comp_ka)} comp, "
@@ -295,7 +348,6 @@ def main():
     parser.add_argument("--max-proteins", type=int, default=None,
                         help="Limit number of proteins to process (for testing)")
     parser.add_argument("--skip-download", action="store_true")
-    parser.add_argument("--skip-cv", default=True, action="store_true")
     parser.add_argument("--no-gpu", action="store_true",
                         help="Disable GPU acceleration for permutation tests")
     parser.add_argument("--batch-size", type=int, default=50,
@@ -309,20 +361,33 @@ def main():
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     # =========================================================
-    # Step 1: Parse Dataset S3
+    # Step 1: Parse Dataset T (training) and Dataset S3 (propensity)
     # =========================================================
     print("=" * 60)
-    print("STEP 1: Parsing Dataset S3")
+    print("STEP 1: Parsing datasets")
     print("=" * 60)
-    proteins_data = parse_dataset_s3(supp_dir)
-    total_proteins = len(proteins_data)
-    total_sites = sum(len(v["sites"]) for v in proteins_data.values())
-    print(f"Found {total_proteins} proteins with {total_sites} CP sites")
+
+    # Dataset T for training (176 labeled sites from 6 proteins)
+    dataset_t_path = supp_dir / "dataset_t.csv"
+    if not dataset_t_path.exists():
+        print(f"  {dataset_t_path} not found. Run scripts/convert_dataset_l.py first.")
+        sys.exit(1)
+    dataset_t = parse_dataset_t(dataset_t_path)
+    n_viable = sum(len(v["sites_viable"]) for v in dataset_t.values())
+    n_inviable = sum(len(v["sites_inviable"]) for v in dataset_t.values())
+    print(f"Dataset T: {len(dataset_t)} proteins, "
+          f"{n_viable} viable + {n_inviable} inviable = {n_viable + n_inviable} sites")
+
+    # Dataset S3 for propensity table construction
+    proteins_s3 = parse_dataset_s3(supp_dir)
+    total_s3 = len(proteins_s3)
+    total_sites_s3 = sum(len(v["sites"]) for v in proteins_s3.values())
+    print(f"Dataset S3: {total_s3} proteins with {total_sites_s3} CP sites (for propensity tables)")
 
     if args.max_proteins:
-        pdb_ids = list(proteins_data.keys())[:args.max_proteins]
-        proteins_data = {k: proteins_data[k] for k in pdb_ids}
-        print(f"Limited to {len(proteins_data)} proteins")
+        pdb_ids = list(proteins_s3.keys())[:args.max_proteins]
+        proteins_s3 = {k: proteins_s3[k] for k in pdb_ids}
+        print(f"  Limited S3 to {len(proteins_s3)} proteins")
 
     # =========================================================
     # Step 2: Download PDB files
@@ -331,7 +396,9 @@ def main():
         print("\n" + "=" * 60)
         print("STEP 2: Downloading PDB structures")
         print("=" * 60)
-        pdb_ids = list(proteins_data.keys())
+
+        # Download Dataset S3 PDBs (for propensity tables)
+        pdb_ids = list(proteins_s3.keys())
         downloaded = 0
         failed = 0
         for i, pdb_id in enumerate(pdb_ids):
@@ -343,29 +410,32 @@ def main():
             if (i + 1) % 50 == 0:
                 print(f"  Progress: {i+1}/{len(pdb_ids)} "
                       f"(downloaded: {downloaded}, failed: {failed})")
-        print(f"  Downloaded: {downloaded}, Failed: {failed}")
+        print(f"  S3 PDBs - Downloaded: {downloaded}, Failed: {failed}")
 
-    # Also download DHFR for verification
+        # Download Dataset T PDBs (for training)
+        for pdb_id in dataset_t:
+            download_pdb(pdb_id, pdb_dir)
+        print(f"  Dataset T PDBs downloaded: {list(dataset_t.keys())}")
+
+    # Download DHFR for independent test
     print("  Downloading DHFR (1RX4)...")
     download_pdb("1rx4", pdb_dir)
 
     # =========================================================
-    # Step 3: Build propensity tables
+    # Step 3: Build propensity tables from Dataset S3
     # =========================================================
     print("\n" + "=" * 60)
-    print("STEP 3: Building propensity tables")
+    print("STEP 3: Building propensity tables (from Dataset S3)")
     print("=" * 60)
 
     use_gpu = not args.no_gpu
     required_tables = ["single_aa", "di_residue", "oligo_residue", "dssp",
                        "ramachandran", "kappa_alpha"]
 
-    # Check if tables need rebuilding: missing, too small, or placeholder zeros
     def _table_needs_rebuild(name):
         path = args.tables_dir / f"{name}.json"
         if not path.exists() or path.stat().st_size < 10:
             return True
-        # Check for placeholder tables (all zeros)
         import json
         try:
             with open(path) as f:
@@ -384,15 +454,14 @@ def main():
         tables.load()
     else:
         print(f"  Missing or incomplete tables: {missing}")
-        # Rebuild ALL tables to ensure consistency
-        tables = build_propensity_tables_from_data(proteins_data, pdb_dir, args.tables_dir,
+        tables = build_propensity_tables_from_data(proteins_s3, pdb_dir, args.tables_dir,
                                                     use_gpu=use_gpu)
 
     # =========================================================
-    # Step 4: Extract features and build training matrix
+    # Step 4: Extract features for Dataset T proteins only
     # =========================================================
     print("\n" + "=" * 60)
-    print("STEP 4: Extracting features")
+    print("STEP 4: Extracting features (Dataset T proteins only)")
     print("=" * 60)
 
     all_X = []
@@ -400,32 +469,26 @@ def main():
     processed = 0
     skipped = 0
 
-    pdb_ids = list(proteins_data.keys())
+    pdb_ids = list(dataset_t.keys())
     worker_args = [
-        (pdb_id, proteins_data[pdb_id], str(pdb_dir / f"{pdb_id}.pdb"), tables)
+        (pdb_id, dataset_t[pdb_id], str(pdb_dir / f"{pdb_id}.pdb"), tables)
         for pdb_id in pdb_ids
     ]
 
-    n_workers = min(8, os.cpu_count() or 1)
-    print(f"  Extracting features with {n_workers} workers...", flush=True)
-    completed = 0
-    with ProcessPoolExecutor(max_workers=n_workers) as executor:
-        futures = {executor.submit(_extract_features_worker, a): a[0]
-                   for a in worker_args}
-        for future in as_completed(futures):
-            result, reason = future.result()
-            completed += 1
-            if result is None:
-                skipped += 1
-                print(f"  SKIP: {reason}", flush=True)
-            else:
-                X, y = result
-                all_X.append(X)
-                all_y.append(y)
-                processed += 1
-            if completed % 50 == 0 or completed == len(pdb_ids):
-                print(f"  Feature extraction: {completed}/{len(pdb_ids)} "
-                      f"(processed: {processed}, skipped: {skipped})", flush=True)
+    # Extract features for each Dataset T protein, keeping only labeled sites
+    for wa in worker_args:
+        result, reason = _extract_features_dataset_t_worker(wa)
+        if result is None:
+            skipped += 1
+            print(f"  SKIP: {reason}", flush=True)
+        else:
+            X, y = result
+            all_X.append(X)
+            all_y.append(y)
+            processed += 1
+            print(f"  {wa[0]}: {len(y)} labeled sites "
+                  f"({int(y.sum())} viable, {len(y) - int(y.sum())} inviable)",
+                  flush=True)
 
     print(f"  Processed: {processed}, Skipped: {skipped}", flush=True)
 
@@ -439,60 +502,23 @@ def main():
     n_pos = int(y_train.sum())
     n_neg = len(y_train) - n_pos
     print(f"\n  Training matrix: {X_train.shape}")
-    print(f"  Positive (CP sites): {n_pos}")
-    print(f"  Negative (non-CP): {n_neg}")
-    print(f"  Ratio: 1:{n_neg // max(n_pos, 1)}")
+    print(f"  Positive (viable CP sites): {n_pos}")
+    print(f"  Negative (inviable CP sites): {n_neg}")
+    print(f"  Ratio: 1:{n_neg / max(n_pos, 1):.1f}")
+    print("  (No downsampling needed — Dataset T is naturally balanced)")
 
     # =========================================================
-    # Step 4b: Downsample negatives to ~2.4:1 ratio (per paper)
-    # =========================================================
-    neg_ratio = 2.4
-    target_neg = int(n_pos * neg_ratio)
-    if target_neg < n_neg:
-        print(f"\n  Downsampling negatives: {n_neg} -> {target_neg} "
-              f"(ratio {neg_ratio}:1)")
-        rng = np.random.RandomState(42)
-        pos_idx = np.where(y_train == 1)[0]
-        neg_idx = np.where(y_train == 0)[0]
-        sampled_neg = rng.choice(neg_idx, size=target_neg, replace=False)
-        keep_idx = np.sort(np.concatenate([pos_idx, sampled_neg]))
-        X_train = X_train[keep_idx]
-        y_train = y_train[keep_idx]
-        n_pos = int(y_train.sum())
-        n_neg = len(y_train) - n_pos
-        print(f"  After sampling: {X_train.shape}")
-        print(f"  Positive: {n_pos}, Negative: {n_neg}, Ratio: 1:{n_neg / max(n_pos, 1):.1f}")
-
-    # =========================================================
-    # Step 5: Cross-validation (optional)
-    # =========================================================
-    if not args.skip_cv:
-        print("\n" + "=" * 60)
-        print("STEP 5: 10-fold Cross-validation")
-        print("=" * 60)
-        from cpred.training.evaluate import cross_validate
-        from cpred.models.random_forest import CPredRandomForest
-
-        # Quick CV with just RF (fastest model)
-        print("Running 10-fold CV with Random Forest...")
-        cv_metrics = cross_validate(
-            CPredRandomForest, X_train, y_train, n_folds=10, n_estimators=100)
-        print(f"\nRF CV Results:")
-        for key, val in cv_metrics.items():
-            print(f"  {key}: {val:.4f}")
-
-    # =========================================================
-    # Step 6: Train final ensemble
+    # Step 5: Train final ensemble
     # =========================================================
     print("\n" + "=" * 60)
-    print("STEP 6: Training final ensemble model")
+    print("STEP 5: Training final ensemble model")
     print("=" * 60)
 
     ensemble = CPredEnsemble(feature_names=FEATURE_NAMES)
     ensemble.fit(X_train, y_train, feature_names=FEATURE_NAMES)
 
     # Evaluate on training set
-    train_probs = ensemble.predict(X_train)
+    train_probs = ensemble.predict_unsmoothed(X_train)
     train_metrics = compute_metrics(y_train, train_probs)
     print("\nEnsemble training set metrics:")
     for key, val in train_metrics.items():
@@ -511,40 +537,73 @@ def main():
     print(f"\nModels saved to {args.output_dir}")
 
     # =========================================================
-    # Step 7: Verification on DHFR (1RX4)
+    # Step 6: Independent test on DHFR (1RX4)
     # =========================================================
     print("\n" + "=" * 60)
-    print("STEP 7: Verification on DHFR (1RX4)")
+    print("STEP 6: Independent test on DHFR (1RX4)")
     print("=" * 60)
 
+    dhfr_csv = supp_dir / "dataset_dhfr.csv"
     dhfr_path = pdb_dir / "1rx4.pdb"
-    if dhfr_path.exists():
+
+    if dhfr_path.exists() and dhfr_csv.exists():
         try:
             dhfr = parse_pdb(dhfr_path, chain_id="A")
             X_dhfr = extract_features_for_protein(dhfr, tables)
+
             if X_dhfr is not None:
-                probs = ensemble.predict(X_dhfr)
-                viable = probs >= 0.5
-                high_conf = probs >= 0.85
+                # Get DHFR labels
+                dhfr_df = pd.read_csv(dhfr_csv)
+                resnum_to_idx = {rn: i for i, rn in enumerate(dhfr.residue_numbers)}
 
-                print(f"  Sequence length: {dhfr.n_residues}")
-                print(f"  Viable (>=0.5): {viable.sum()} residues")
-                print(f"  High confidence (>=0.85): {high_conf.sum()} residues")
-                print(f"  Mean probability: {probs.mean():.4f}")
-                print(f"  Max probability: {probs.max():.4f}")
+                labeled_indices = []
+                labels = []
+                for _, row in dhfr_df.iterrows():
+                    idx = resnum_to_idx.get(int(row['residue_number']))
+                    if idx is not None:
+                        labeled_indices.append(idx)
+                        labels.append(int(row['viable']))
 
-                # Show top 10 predicted sites
-                top_indices = np.argsort(probs)[-10:][::-1]
-                print("\n  Top 10 predicted CP sites:")
-                print(f"  {'Res#':>5} {'AA':>3} {'Prob':>6}")
-                for idx in top_indices:
-                    print(f"  {dhfr.residue_numbers[idx]:>5} "
-                          f"{dhfr.sequence[idx]:>3} "
-                          f"{probs[idx]:>6.4f}")
+                if labeled_indices:
+                    X_dhfr_labeled = X_dhfr[labeled_indices]
+                    y_dhfr = np.array(labels)
+
+                    # Predict (smoothed, on full protein then extract labeled)
+                    probs_full = ensemble.predict(X_dhfr)
+                    probs_labeled = probs_full[labeled_indices]
+
+                    dhfr_metrics = compute_metrics(y_dhfr, probs_labeled)
+                    print(f"\n  DHFR results ({len(y_dhfr)} sites, "
+                          f"{int(y_dhfr.sum())} viable, "
+                          f"{len(y_dhfr) - int(y_dhfr.sum())} inviable):")
+                    for key, val in dhfr_metrics.items():
+                        print(f"    {key}: {val:.4f}")
+
+                    print("\n  Paper reference (DHFR independent test):")
+                    print("    AUC:         0.906")
+                    print("    Sensitivity: 0.709")
+                    print("    Specificity: 0.918")
+                    print("    MCC:         0.633")
+
+                    # Show top 10 predicted sites
+                    top_indices = np.argsort(probs_full)[-10:][::-1]
+                    print("\n  Top 10 predicted CP sites:")
+                    print(f"  {'Res#':>5} {'AA':>3} {'Prob':>6}")
+                    for idx in top_indices:
+                        print(f"  {dhfr.residue_numbers[idx]:>5} "
+                              f"{dhfr.sequence[idx]:>3} "
+                              f"{probs_full[idx]:>6.4f}")
         except Exception as e:
-            print(f"  DHFR verification failed: {e}")
+            print(f"  DHFR test failed: {e}")
+            import traceback
+            traceback.print_exc()
     else:
-        print("  DHFR PDB not found, skipping verification")
+        missing = []
+        if not dhfr_path.exists():
+            missing.append("PDB")
+        if not dhfr_csv.exists():
+            missing.append("CSV (run convert_dataset_l.py)")
+        print(f"  DHFR files not found ({', '.join(missing)}), skipping")
 
     print("\n" + "=" * 60)
     print("TRAINING COMPLETE!")
