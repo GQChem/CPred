@@ -109,7 +109,7 @@ def main():
     parser.add_argument("--n-permutations", type=int, default=99999,
                         help="Number of permutations for propensity p-values (Lo et al. 2012)")
     parser.add_argument("--skip-download", action="store_true")
-    parser.add_argument("--rmsf-dir", type=Path, default=None,
+    parser.add_argument("--rmsf-dir", type=Path, default=Path("data/rmsf"),
                         help="Directory with per-protein RMSF CSVs from CABSflex")
     args = parser.parse_args()
 

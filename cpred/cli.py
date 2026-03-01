@@ -19,6 +19,11 @@ def cmd_predict(args: argparse.Namespace) -> None:
         print(f"Error: PDB file not found: {pdb_path}", file=sys.stderr)
         sys.exit(1)
 
+    rmsf_path = Path(args.rmsf)
+    if not rmsf_path.exists():
+        print(f"Error: RMSF file not found: {rmsf_path}", file=sys.stderr)
+        sys.exit(1)
+
     # Load propensity tables
     tables = PropensityTables(args.tables_dir)
     tables.load()
@@ -40,6 +45,7 @@ def cmd_predict(args: argparse.Namespace) -> None:
         tables=tables,
         model=model,
         threshold=args.threshold,
+        rmsf_file=rmsf_path,
     )
 
     # Output format
@@ -97,6 +103,7 @@ def main() -> None:
     pred_parser = subparsers.add_parser("predict",
                                          help="Predict CP sites from PDB")
     pred_parser.add_argument("pdb", help="Path to PDB file")
+    pred_parser.add_argument("rmsf", help="Path to RMSF CSV file from CABSflex")
     pred_parser.add_argument("--chain", "-c", default="A",
                              help="Chain ID (default: A)")
     pred_parser.add_argument("--threshold", "-t", type=float, default=0.5,

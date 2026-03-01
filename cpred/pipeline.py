@@ -94,17 +94,108 @@ FEATURE_GROUPS = {
 }
 
 
-def load_rmsf(pdb_id: str, residue_numbers: list[int],
-              rmsf_dir: Path | str | None = None) -> np.ndarray:
-    """Load per-residue RMSF values from a CABSflex CSV file.
+def _parse_rmsf_csv(csv_path: Path, chain_id: str = "A") -> dict[int, float]:
+    """Parse an RMSF CSV file, auto-detecting format.
 
-    Expects a CSV file at ``rmsf_dir/{pdb_id}.csv`` with columns
-    ``residue_number`` and ``rmsf``.
+    Supported formats:
+      1. Header ``id,chain,resi,rmsf`` (CABSflex output with header)
+      2. Header ``residue_number,rmsf``
+      3. No header, two columns: ``<chain><resnum>,<rmsf>`` (e.g. ``A6,0.45``)
+
+    Returns:
+        Mapping from residue number (int) to RMSF value (float).
+    """
+    import re
+
+    with open(csv_path) as f:
+        first_line = f.readline().strip()
+
+    resnum_to_rmsf: dict[int, float] = {}
+
+    # Detect format from first line
+    if "resi" in first_line.lower() and "rmsf" in first_line.lower():
+        # Format 1: id,chain,resi,rmsf (CABSflex with header)
+        df = pd.read_csv(csv_path)
+        col_resi = [c for c in df.columns if c.lower() == "resi"][0]
+        col_rmsf = [c for c in df.columns if c.lower() == "rmsf"][0]
+        if "chain" in [c.lower() for c in df.columns]:
+            col_chain = [c for c in df.columns if c.lower() == "chain"][0]
+            df = df[df[col_chain].astype(str) == chain_id]
+        resnum_to_rmsf = dict(zip(df[col_resi].astype(int),
+                                   df[col_rmsf].astype(float)))
+    elif "residue_number" in first_line.lower() and "rmsf" in first_line.lower():
+        # Format 2: residue_number,rmsf
+        df = pd.read_csv(csv_path)
+        resnum_to_rmsf = dict(zip(df["residue_number"].astype(int),
+                                   df["rmsf"].astype(float)))
+    else:
+        # Format 3: no header, <chain><resnum>,<rmsf> (e.g. A6,0.45)
+        # or just <resnum>,<rmsf>
+        with open(csv_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split(",")
+                if len(parts) < 2:
+                    continue
+                col0, col1 = parts[0].strip(), parts[1].strip()
+                try:
+                    rmsf_val = float(col1)
+                except ValueError:
+                    continue
+                # Try parsing <chain><resnum> like "A6"
+                m = re.match(r"([A-Za-z])(\d+)$", col0)
+                if m:
+                    if m.group(1).upper() == chain_id.upper():
+                        resnum_to_rmsf[int(m.group(2))] = rmsf_val
+                else:
+                    # Plain integer residue number
+                    try:
+                        resnum_to_rmsf[int(col0)] = rmsf_val
+                    except ValueError:
+                        continue
+
+    return resnum_to_rmsf
+
+
+def load_rmsf_file(csv_path: Path | str, residue_numbers: list[int],
+                   chain_id: str = "A") -> np.ndarray:
+    """Load RMSF from a single CSV file.
+
+    Args:
+        csv_path: Path to RMSF CSV file.
+        residue_numbers: Residue numbers from the parsed protein structure.
+        chain_id: Chain ID to filter on (for multi-chain CSVs).
+
+    Returns:
+        (N,) array of RMSF values.  NaN for residues not found.
+    """
+    csv_path = Path(csv_path)
+    n = len(residue_numbers)
+    if not csv_path.exists():
+        return np.full(n, np.nan)
+
+    resnum_to_rmsf = _parse_rmsf_csv(csv_path, chain_id)
+    rmsf = np.full(n, np.nan)
+    for i, rn in enumerate(residue_numbers):
+        if rn in resnum_to_rmsf:
+            rmsf[i] = resnum_to_rmsf[rn]
+    return rmsf
+
+
+def load_rmsf(pdb_id: str, residue_numbers: list[int],
+              rmsf_dir: Path | str | None = None,
+              chain_id: str = "A") -> np.ndarray:
+    """Load per-residue RMSF values from a CABSflex CSV file in a directory.
+
+    Searches for ``{pdb_id}.csv`` or ``{pdb_id}_RMSF.csv`` in *rmsf_dir*.
 
     Args:
         pdb_id: PDB identifier (lowercase).
         residue_numbers: Residue numbers from the parsed protein structure.
         rmsf_dir: Directory containing RMSF CSV files.
+        chain_id: Chain ID to filter on.
 
     Returns:
         (N,) array of RMSF values.  NaN for residues not found in the CSV.
@@ -114,32 +205,28 @@ def load_rmsf(pdb_id: str, residue_numbers: list[int],
         return np.full(n, np.nan)
 
     rmsf_dir = Path(rmsf_dir)
-    csv_path = rmsf_dir / f"{pdb_id.lower()}.csv"
-    if not csv_path.exists():
-        return np.full(n, np.nan)
+    # Try multiple naming conventions
+    for name in [f"{pdb_id.lower()}.csv", f"{pdb_id.lower()}_RMSF.csv",
+                 f"{pdb_id.upper()}.csv", f"{pdb_id.upper()}_RMSF.csv"]:
+        csv_path = rmsf_dir / name
+        if csv_path.exists():
+            return load_rmsf_file(csv_path, residue_numbers, chain_id)
 
-    df = pd.read_csv(csv_path)
-    resnum_to_rmsf = dict(zip(df["residue_number"].astype(int), df["rmsf"].astype(float)))
-
-    rmsf = np.full(n, np.nan)
-    for i, rn in enumerate(residue_numbers):
-        if rn in resnum_to_rmsf:
-            rmsf[i] = resnum_to_rmsf[rn]
-    return rmsf
+    return np.full(n, np.nan)
 
 
 def extract_all_features(protein: ProteinStructure,
                          tables: PropensityTables,
-                         rmsf_dir: Path | str | None = None) -> dict[str, np.ndarray]:
+                         rmsf_dir: Path | str | None = None,
+                         rmsf_file: Path | str | None = None) -> dict[str, np.ndarray]:
     """Extract all features for a protein structure.
 
     Args:
         protein: Parsed protein structure.
         tables: Propensity lookup tables.
         rmsf_dir: Directory containing per-protein RMSF CSV files from
-            CABSflex (one file per protein: ``{pdb_id}.csv`` with columns
-            ``residue_number,rmsf``).  If None, RMSF is filled with NaN
-            and will become 0 after Z-score normalization.
+            CABSflex.  Ignored if *rmsf_file* is given.
+        rmsf_file: Path to a single RMSF CSV file for this protein.
 
     Returns:
         Dictionary mapping feature name to (N,) arrays.
@@ -175,7 +262,12 @@ def extract_all_features(protein: ProteinStructure,
             cat_c[key] = contact_feats[key]
 
     # RMSF from CABSflex
-    cat_c["rmsf"] = load_rmsf(protein.pdb_id, protein.residue_numbers, rmsf_dir)
+    if rmsf_file is not None:
+        cat_c["rmsf"] = load_rmsf_file(rmsf_file, protein.residue_numbers,
+                                        protein.chain_id)
+    else:
+        cat_c["rmsf"] = load_rmsf(protein.pdb_id, protein.residue_numbers,
+                                   rmsf_dir, protein.chain_id)
 
     # GNM fluctuation
     cat_c["gnm_msf"] = gnm_msf
@@ -209,7 +301,8 @@ def build_feature_matrix(features: dict[str, np.ndarray]) -> np.ndarray:
 def predict_from_pdb(pdb_path: str | Path, chain_id: str = "A",
                      tables: PropensityTables | None = None,
                      model=None,
-                     threshold: float = 0.5) -> dict:
+                     threshold: float = 0.5,
+                     rmsf_file: str | Path | None = None) -> dict:
     """Full prediction pipeline from PDB file.
 
     Args:
@@ -218,6 +311,7 @@ def predict_from_pdb(pdb_path: str | Path, chain_id: str = "A",
         tables: Propensity tables (loaded if None).
         model: Trained ensemble model (uses default if None).
         threshold: Probability threshold for viable prediction.
+        rmsf_file: Path to RMSF CSV file from CABSflex.
 
     Returns:
         Dictionary with prediction results.
@@ -231,7 +325,7 @@ def predict_from_pdb(pdb_path: str | Path, chain_id: str = "A",
         tables.load()
 
     # Extract features
-    features = extract_all_features(protein, tables)
+    features = extract_all_features(protein, tables, rmsf_file=rmsf_file)
 
     # Standardize
     features = standardize_features(features)

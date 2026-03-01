@@ -358,10 +358,8 @@ def main():
                         help="Number of permutations for propensity p-values (Lo et al. 2012)")
     parser.add_argument("--batch-size", type=int, default=50,
                         help="Process proteins in batches")
-    parser.add_argument("--rmsf-dir", type=Path, default=None,
-                        help="Directory with per-protein RMSF CSV files from CABSflex "
-                             "(one file per protein: {pdb_id}.csv with columns "
-                             "residue_number,rmsf)")
+    parser.add_argument("--rmsf-dir", type=Path, default=Path("data/rmsf"),
+                        help="Directory with per-protein RMSF CSVs from CABSflex")
     args = parser.parse_args()
 
     supp_dir = args.data_dir / "supplementary"
