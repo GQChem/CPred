@@ -44,62 +44,63 @@ from sklearn.metrics import roc_auc_score
 # =====================================================================
 
 # Category A: primary sequence propensity (1dprop)
-# Sub-groups for each propensity type × window radius
-# R = single residue, 2R = di-residue, RxR = coupled-residue
-# aac3 = 3-residue segment, aac5 = 5-residue segment
-# nR combines higher-order terms
+# Weights from Figure 4 branches. New feature names match sequence_propensity.py.
 
 _CAT_A_SUBGROUPS = {
     "R_1dprop": {
-        "features": {"prop_aa_0": 0.27, "prop_di_0": 0.70, "prop_oligo_0": 0.03},
+        # R_aa=0.27, R_aac3=0.70, R_aac5=0.03
+        "features": {"R_aa": 0.27, "R_aac3": 0.70, "R_aac5": 0.03},
         "weight": 0.01,
     },
     "2R_1dprop": {
-        "features": {"prop_aa_m1": 0.13, "prop_aa_p1": 0.13,
-                      "prop_di_m1": 0.235, "prop_di_p1": 0.235,
-                      "prop_oligo_m1": 0.135, "prop_oligo_p1": 0.135},
+        # 2R_aa=0.26, 2R_aac3=0.47, 2R_aac5=0.27
+        "features": {"2R_aa": 0.26, "2R_aac3": 0.47, "2R_aac5": 0.27},
         "weight": 0.01,
     },
     "RxR_1dprop": {
-        "features": {"prop_aa_m2": 0.05, "prop_aa_p2": 0.05,
-                      "prop_di_m2": 0.445, "prop_di_p2": 0.445,
-                      "prop_oligo_m2": 0.005, "prop_oligo_p2": 0.005},
+        # RxR_aa=0.10, RxR_aac3=0.89, RxR_aac5=0.01
+        "features": {"RxR_aa": 0.10, "RxR_aac3": 0.89, "RxR_aac5": 0.01},
         "weight": 0.75,
     },
     "nR_1dprop": {
-        "features": {"prop_aa_m3": 0.005, "prop_aa_p3": 0.005,
-                      "prop_di_m3": 0.32, "prop_di_p3": 0.32,
-                      "prop_oligo_m3": 0.17, "prop_oligo_p3": 0.17},
+        # R2xR, R3xR, 3R, 4R, 5R patterns — combine with equal weight as approximation
+        # Paper shows nR as a single node (weight 0.97) combining remaining patterns
+        "features": {
+            "R2xR_aa": 0.03, "R2xR_aac3": 0.96, "R2xR_aac5": 0.01,
+            "R3xR_aac3": 0.62, "R3xR_aac5": 0.38,
+            "3R_aac3": 0.63, "3R_aac5": 0.01,
+            "4R_aac3": 0.34, "4R_aac5": 0.01,
+            "5R_aac3": 0.01,
+        },
         "weight": 0.97,
     },
 }
 
-# Intermediate node: 1dprop combines the 4 sub-groups
-# Then further: RnxR_1dprop(RxR=0.75, nR=0.97) -> weight 0.01
-# 1dprop(R=0.01, 2R=0.01, RnxR=0.01) -> simplify to flat weighted avg
-
 # Category B: secondary structure propensity (2dprop)
+# Weights from Figure 4, mapped to new feature names from secondary_structure.py
 _CAT_B_SUBGROUPS = {
     "R_2dprop": {
-        "features": {"prop_dssp_0": 0.87, "prop_rama_0": 0.01, "prop_kappa_alpha_0": 0.12},
+        # R_sse=0.87, R_rm=0.01, R_ka=0.12
+        "features": {"R_sse": 0.87, "R_rm": 0.01, "R_ka": 0.12},
         "weight": 0.83,
     },
     "2R_2dprop": {
-        "features": {"prop_dssp_m1": 0.41, "prop_dssp_p1": 0.41,
-                      "prop_rama_m1": 0.03, "prop_rama_p1": 0.03,
-                      "prop_kappa_alpha_m1": 0.06, "prop_kappa_alpha_p1": 0.06},
+        # 2R_sse=0.82, 2R_rm=0.06, 2R_ka=0.12
+        "features": {"2R_sse": 0.82, "2R_rm": 0.06, "2R_ka": 0.12},
         "weight": 0.01,
     },
     "RxR_2dprop": {
-        "features": {"prop_dssp_m2": 0.365, "prop_dssp_p2": 0.365,
-                      "prop_rama_m2": 0.04, "prop_rama_p2": 0.04,
-                      "prop_kappa_alpha_m2": 0.095, "prop_kappa_alpha_p2": 0.095},
+        # RxR_sse=0.73, RxR_rm=0.08, RxR_ka=0.19
+        "features": {"RxR_sse": 0.73, "RxR_rm": 0.08, "RxR_ka": 0.19},
         "weight": 0.94,
     },
     "RnxR_2dprop": {
-        "features": {"prop_dssp_m3": 0.335, "prop_dssp_p3": 0.335,
-                      "prop_rama_m3": 0.105, "prop_rama_p3": 0.105,
-                      "prop_kappa_alpha_m3": 0.06, "prop_kappa_alpha_p3": 0.06},
+        # R2xR + R3xR combined — R2xR_sse=0.67, R2xR_rm=0.21, R2xR_ka=0.12
+        #                         R3xR_sse=0.24, R3xR_rm=0.35, R3xR_ka=0.41
+        "features": {
+            "R2xR_sse": 0.335, "R2xR_rm": 0.105, "R2xR_ka": 0.06,
+            "R3xR_sse": 0.12,  "R3xR_rm":  0.175, "R3xR_ka": 0.205,
+        },
         "weight": 0.16,
     },
 }

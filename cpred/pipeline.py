@@ -3,11 +3,11 @@
 Orchestrates: PDB parsing -> feature extraction -> standardization -> prediction.
 
 The features are organized into three categories (per Lo et al. 2012):
-  Category A (sequence propensity): 3 features × 7 window positions = 21
-  Category B (SS propensity):       3 features × 7 window positions = 21
+  Category A (sequence propensity): 19 coupled-residue propensity features
+  Category B (SS propensity):       15 coupled-SS propensity features
   Category C (tertiary structure):  16 window-averaged structural features
 
-Total: 21 + 21 + 16 = 58 features
+Total: 19 + 15 + 16 = 50 features
 """
 
 from __future__ import annotations
@@ -24,31 +24,28 @@ from cpred.features.contact_network import extract_contact_network_features
 from cpred.features.gnm import compute_gnm_fluctuation
 from cpred.features.sequence_propensity import extract_sequence_propensity_features
 from cpred.features.secondary_structure import extract_secondary_structure_features
-from cpred.features.window import (
-    window_average_dict, window_average,
-    window_expand_dict, DEFAULT_WINDOW,
-)
+from cpred.features.window import window_average_dict, window_average
 from cpred.features.standardization import standardize_features
 
-# Window positions suffixes for expanded features
-_W = DEFAULT_WINDOW
-_SUFFIXES = []
-for j in range(2 * _W + 1):
-    offset = j - _W
-    if offset < 0:
-        _SUFFIXES.append(f"_m{abs(offset)}")
-    elif offset == 0:
-        _SUFFIXES.append("_0")
-    else:
-        _SUFFIXES.append(f"_p{offset}")
+# Category A: 19 coupled-residue propensity features (per Figure 4, 1dprop branch)
+CAT_A_FEATURES = [
+    "R_aa", "R_aac3", "R_aac5",
+    "2R_aa", "2R_aac3", "2R_aac5",
+    "RxR_aa", "RxR_aac3", "RxR_aac5",
+    "R2xR_aa", "R2xR_aac3", "R2xR_aac5",
+    "R3xR_aac3", "R3xR_aac5",
+    "3R_aac3", "3R_aac5",
+    "4R_aac3", "4R_aac5",
+    "5R_aac3",
+]
 
-# Category A base features (expanded to 21 = 3 × 7)
-_CAT_A_BASE = ["prop_aa", "prop_di", "prop_oligo"]
-CAT_A_FEATURES = [f"{base}{suf}" for base in _CAT_A_BASE for suf in _SUFFIXES]
-
-# Category B base features (expanded to 21 = 3 × 7)
-_CAT_B_BASE = ["prop_dssp", "prop_rama", "prop_kappa_alpha"]
-CAT_B_FEATURES = [f"{base}{suf}" for base in _CAT_B_BASE for suf in _SUFFIXES]
+# Category B: 15 coupled SS propensity features (per Figure 4, 2dprop branch)
+# 5 features × 3 SS alphabets (DSSP, Ramachandran, kappa-alpha)
+CAT_B_FEATURES = [
+    "R_sse", "2R_sse", "RxR_sse", "R2xR_sse", "R3xR_sse",
+    "R_rm",  "2R_rm",  "RxR_rm",  "R2xR_rm",  "R3xR_rm",
+    "R_ka",  "2R_ka",  "RxR_ka",  "R2xR_ka",  "R3xR_ka",
+]
 
 # Category C: all 16 tertiary structural features (window-averaged)
 # Per Lo et al. 2012, Table 1 and Figure 3:
@@ -78,19 +75,22 @@ CAT_C_FEATURES = [
 # Full canonical feature order
 FEATURE_NAMES = CAT_A_FEATURES + CAT_B_FEATURES + CAT_C_FEATURES
 
-NUM_FEATURES = len(FEATURE_NAMES)  # 57
+NUM_FEATURES = len(FEATURE_NAMES)  # 50
 
 # Feature groups for the HI model (matching Figure 4 categories)
 FEATURE_GROUPS = {
-    "seq_propensity": CAT_A_FEATURES,
-    "ss_propensity": CAT_B_FEATURES,
-    "tertiary_packing": ["rsa", "depth", "cm", "bfactor"],
-    "contact_network": ["closeness", "cn", "wcn"],
-    "farness": ["farness_buried", "farness_hydrophobic",
-                 "farness_union", "farness_inter",
-                 "dis_b", "dis_hpho"],
-    "hbonds": ["hbond"],
-    "dynamics": ["rmsf", "gnm_msf"],
+    "seq_propensity": CAT_A_FEATURES,   # 1dprop, weight 0.14
+    "ss_propensity": CAT_B_FEATURES,    # 2dprop, weight 0.57
+    # 3dprop sub-groups (weight 0.29):
+    "solacc": ["rsa"],                  # Solacc
+    "eccent": ["cm", "depth"],          # Eccent
+    "awaycore": ["farness_buried", "dis_b"],              # Awaybury
+    "awayhpho": ["farness_hydrophobic", "dis_hpho"],      # Awayhpho
+    "hbonds": ["hbond"],                # Nhbonds
+    "uncrowd": ["wcn", "cn", "closeness"],  # Uncrowd
+    "dynamics": ["gnm_msf", "rmsf", "bfactor"],           # Flex
+    # Extra Cat C not in the 46 but we keep them
+    "extra": ["farness_union", "farness_inter"],
 }
 
 
@@ -233,15 +233,13 @@ def extract_all_features(protein: ProteinStructure,
     """
     features = {}
 
-    # Category A: sequence propensity — window EXPAND to 21 features
+    # Category A: coupled-residue propensity features (19, already per-position)
     seq_feats = extract_sequence_propensity_features(protein.sequence, tables)
-    seq_expanded = window_expand_dict(seq_feats)
-    features.update(seq_expanded)
+    features.update(seq_feats)
 
-    # Category B: SS propensity — window EXPAND to 21 features
+    # Category B: coupled SS propensity features (15, already per-position)
     ss_feats = extract_secondary_structure_features(protein, tables)
-    ss_expanded = window_expand_dict(ss_feats)
-    features.update(ss_expanded)
+    features.update(ss_feats)
 
     # Category C: tertiary structure — window AVERAGE to single values
     tert_feats = extract_tertiary_features(protein)
