@@ -496,8 +496,15 @@ def main():
             all_X.append(X)
             all_y.append(y)
             processed += 1
+            # Per-protein debug: feature stats for a few key features
+            cat_a_mean = X[:, :len([f for f in FEATURE_NAMES if f in
+                                     ["R_aa","R_aac3","RxR_aac3","2R_aac3"]])].mean()
+            rmsf_idx = FEATURE_NAMES.index("rmsf") if "rmsf" in FEATURE_NAMES else None
+            rmsf_info = (f", RMSF nonzero={int(np.count_nonzero(~np.isnan(X[:, rmsf_idx])))}/{len(y)}"
+                         if rmsf_idx is not None else "")
             print(f"  {wa[0]}: {len(y)} labeled sites "
-                  f"({int(y.sum())} viable, {len(y) - int(y.sum())} inviable)",
+                  f"({int(y.sum())} viable, {len(y) - int(y.sum())} inviable)"
+                  f"{rmsf_info}",
                   flush=True)
 
     print(f"  Processed: {processed}, Skipped: {skipped}", flush=True)
@@ -512,10 +519,32 @@ def main():
     n_pos = int(y_train.sum())
     n_neg = len(y_train) - n_pos
     print(f"\n  Training matrix: {X_train.shape}")
+    print(f"  Feature names ({len(FEATURE_NAMES)}): {FEATURE_NAMES[:5]}...{FEATURE_NAMES[-3:]}")
     print(f"  Positive (viable CP sites): {n_pos}")
     print(f"  Negative (inviable CP sites): {n_neg}")
     print(f"  Ratio: 1:{n_neg / max(n_pos, 1):.1f}")
     print("  (No downsampling needed — Dataset T is naturally balanced)")
+
+    # Feature sanity check: viable vs inviable mean per category
+    pos_mask = y_train == 1
+    neg_mask = y_train == 0
+    cat_a_end = len([f for f in FEATURE_NAMES if f.startswith(("R_", "2R_", "RxR", "R2x", "R3x", "3R_", "4R_", "5R_"))])
+    cat_b_end = cat_a_end + len([f for f in FEATURE_NAMES if f.endswith(("_sse", "_rm", "_ka"))])
+    print(f"\n  Feature means (viable vs inviable):")
+    print(f"    Cat A (seq propensity):  viable={X_train[pos_mask, :cat_a_end].mean():.4f}  "
+          f"inviable={X_train[neg_mask, :cat_a_end].mean():.4f}")
+    print(f"    Cat B (SS propensity):   viable={X_train[pos_mask, cat_a_end:cat_b_end].mean():.4f}  "
+          f"inviable={X_train[neg_mask, cat_a_end:cat_b_end].mean():.4f}")
+    print(f"    Cat C (tertiary):        viable={X_train[pos_mask, cat_b_end:].mean():.4f}  "
+          f"inviable={X_train[neg_mask, cat_b_end:].mean():.4f}")
+    # Check key individual features
+    for fname in ["R_aa", "RxR_aac3", "rsa", "farness_buried", "rmsf", "gnm_msf"]:
+        if fname in FEATURE_NAMES:
+            idx = FEATURE_NAMES.index(fname)
+            v_mean = X_train[pos_mask, idx].mean()
+            n_mean = X_train[neg_mask, idx].mean()
+            print(f"    {fname:20s}: viable={v_mean:+.3f}  inviable={n_mean:+.3f}  "
+                  f"diff={v_mean - n_mean:+.3f}")
 
     # =========================================================
     # Step 5: Train final ensemble
@@ -588,6 +617,14 @@ def main():
                           f"{len(y_dhfr) - int(y_dhfr.sum())} inviable):")
                     for key, val in dhfr_metrics.items():
                         print(f"    {key}: {val:.4f}")
+
+                    # Per-model DHFR metrics
+                    individual_dhfr = ensemble.predict_individual(X_dhfr)
+                    for mname, mprobs in individual_dhfr.items():
+                        m = compute_metrics(y_dhfr, mprobs[labeled_indices])
+                        print(f"    [{mname.upper():3s}] AUC={m['auc']:.4f}  "
+                              f"Sens={m['sensitivity']:.3f}  Spec={m['specificity']:.3f}  "
+                              f"MCC={m['mcc']:.3f}")
 
                     print("\n  Paper reference (DHFR independent test):")
                     print("    AUC:         0.906")
