@@ -115,11 +115,8 @@ def run_dssp(pdb_path: Path, model, chain_id: str,
     try:
         dssp = DSSP(model, str(pdb_path), dssp="mkdssp")
     except Exception:
-        try:
-            dssp = DSSP(model, str(pdb_path))
         except Exception as e:
-            warnings.warn(f"DSSP failed: {e}. Secondary structure features unavailable.")
-            return None
+            raise RuntimeError(f"DSSP failed for {pdb_path}: {e}") from e
 
     n = len(residues)
     ss = ["C"] * n
@@ -161,20 +158,13 @@ def run_dssp(pdb_path: Path, model, chain_id: str,
         #   NH_O_1_relidx, NH_O_1_energy, O_NH_1_relidx, O_NH_1_energy,
         #   NH_O_2_relidx, NH_O_2_energy, O_NH_2_relidx, O_NH_2_energy)
         # Energy indices: 7, 9, 11, 13 — bond exists if energy < -0.5 kcal/mol
-        try:
-            n_bonds = 0
-            for hb_idx in (7, 9, 11, 13):
-                if hb_idx < len(dssp_data):
-                    energy = dssp_data[hb_idx]
-                    if isinstance(energy, (int, float)) and energy < -0.5:
-                        n_bonds += 1
-            hbond_count[idx] = float(n_bonds)
-        except (IndexError, TypeError):
-            # Fallback: estimate from SS type
-            if ss[idx] in ("H", "G", "I"):
-                hbond_count[idx] = 2.0
-            elif ss[idx] in ("E", "B"):
-                hbond_count[idx] = 1.0
+        n_bonds = 0
+        for hb_idx in (7, 9, 11, 13):
+            if hb_idx < len(dssp_data):
+                energy = dssp_data[hb_idx]
+                if isinstance(energy, (int, float)) and energy < -0.5:
+                    n_bonds += 1
+        hbond_count[idx] = float(n_bonds)
 
     return DSSPResult(ss=ss, rsa=rsa, phi=phi, psi=psi, nhbond=hbond_count)
 

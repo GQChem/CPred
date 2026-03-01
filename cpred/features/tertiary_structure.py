@@ -24,7 +24,7 @@ SURFACE_RSA_THRESHOLD = 0.20
 def compute_rsa(protein: ProteinStructure) -> np.ndarray:
     """Relative solvent accessibility from DSSP."""
     if protein.dssp is None:
-        return np.full(protein.n_residues, np.nan)
+        raise RuntimeError(f"DSSP not available for {protein.pdb_id}")
     return protein.dssp.rsa.copy()
 
 
@@ -58,7 +58,7 @@ def compute_depth(protein: ProteinStructure) -> np.ndarray:
     Approximation using CA distances to surface residues defined by RSA.
     """
     if protein.dssp is None:
-        return np.full(protein.n_residues, np.nan)
+        raise RuntimeError(f"DSSP not available for {protein.pdb_id}")
 
     surface_mask = protein.dssp.rsa >= SURFACE_RSA_THRESHOLD
     if not np.any(surface_mask):
@@ -75,12 +75,9 @@ def compute_bfactor(protein: ProteinStructure) -> np.ndarray:
 
 
 def compute_hbond_count(protein: ProteinStructure) -> np.ndarray:
-    """Count of backbone hydrogen bonds per residue from DSSP.
-
-    Uses actual H-bond counts parsed from DSSP output when available.
-    """
+    """Count of backbone hydrogen bonds per residue from DSSP."""
     if protein.dssp is None:
-        return np.full(protein.n_residues, np.nan)
+        raise RuntimeError(f"DSSP not available for {protein.pdb_id}")
 
     return protein.dssp.nhbond.copy()
 
@@ -91,7 +88,7 @@ def compute_avg_distance_to_buried(protein: ProteinStructure) -> np.ndarray:
     DIS_b in the paper (Figure 3K). Uses harmonic mean of distances.
     """
     if protein.dssp is None:
-        return np.full(protein.n_residues, np.nan)
+        raise RuntimeError(f"DSSP not available for {protein.pdb_id}")
     buried_mask = protein.dssp.rsa < 0.10
     if not np.any(buried_mask):
         return np.zeros(protein.n_residues)

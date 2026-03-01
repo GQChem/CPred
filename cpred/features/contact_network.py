@@ -112,7 +112,7 @@ def _compute_farness_graph(G: nx.Graph, n: int,
 def compute_farness_buried(G: nx.Graph, protein: ProteinStructure) -> np.ndarray:
     """Farness to buried residues (RSA < 10%)."""
     if protein.dssp is None:
-        return np.full(protein.n_residues, np.nan)
+        raise RuntimeError(f"DSSP not available for {protein.pdb_id}")
     buried_mask = protein.dssp.rsa < 0.10
     return _compute_farness_graph(G, protein.n_residues, buried_mask)
 

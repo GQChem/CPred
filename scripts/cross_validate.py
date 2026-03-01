@@ -166,7 +166,8 @@ def main():
 
     use_gpu = not args.no_gpu
     required_tables = ["single_aa", "di_residue", "oligo_residue",
-                       "dssp", "ramachandran", "kappa_alpha"]
+                       "dssp", "di_dssp", "ramachandran", "di_ramachandran",
+                       "kappa_alpha", "di_kappa_alpha"]
 
     def _table_needs_rebuild(name):
         import json
@@ -256,7 +257,7 @@ def main():
             ensemble.fit(X_all, y_all, feature_names=FEATURE_NAMES)
 
             dhfr = parse_pdb(dhfr_path, chain_id="A")
-            X_dhfr = extract_features_for_protein(dhfr, tables, rmsf_dir=rmsf_dir)
+            X_dhfr = extract_features_for_protein(dhfr, tables, rmsf_dir=str(args.rmsf_dir))
 
             if X_dhfr is not None:
                 dhfr_df = pd.read_csv(dhfr_csv)

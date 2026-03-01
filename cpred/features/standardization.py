@@ -35,12 +35,8 @@ _INVERT_BASE = {
 
 
 def _should_invert(name: str) -> bool:
-    """Check if a feature name (possibly window-expanded) should be inverted."""
-    if name in _INVERT_BASE:
-        return True
-    # Check base name for expanded features like "closeness_m3"
-    base = name.rsplit("_", 1)[0] if "_" in name else name
-    return base in _INVERT_BASE
+    """Check if a feature name should be inverted."""
+    return name in _INVERT_BASE
 
 
 FEATURES_TO_INVERT = _INVERT_BASE

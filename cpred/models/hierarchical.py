@@ -273,8 +273,7 @@ class CPredHierarchical:
         if_scores = self.compute_if_score(X)
 
         if self._train_if_pos is None or self._train_if_neg is None:
-            # Not fitted: use sigmoid fallback
-            return 1 / (1 + np.exp(-if_scores))
+            raise RuntimeError("CPredHierarchical.predict() called before fit()")
 
         probs = np.zeros(len(if_scores))
         for i, if_val in enumerate(if_scores):

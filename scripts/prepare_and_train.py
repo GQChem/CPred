@@ -192,38 +192,69 @@ def _parse_one_protein(args):
 
     resnum_to_idx = {rn: i for i, rn in enumerate(protein.residue_numbers)}
 
-    exp_aa = []
-    exp_dssp = []
-    exp_rama = []
-    exp_ka = []
+    # exp_*_windows: list of per-site windows (each window = list of codes)
+    # exp_*_flat: flat list for single-code tables
+    exp_aa_windows = []
+    exp_dssp_windows = []
+    exp_rama_windows = []
+    exp_ka_windows = []
+    exp_aa_flat = []
+    exp_dssp_flat = []
+    exp_rama_flat = []
+    exp_ka_flat = []
+
     for site in info["sites"]:
         idx = resnum_to_idx.get(site)
         if idx is None:
             continue
-        for pos in range(max(0, idx - 3), min(len(seq), idx + 4)):
-            exp_aa.append(seq[pos])
+        positions = range(max(0, idx - 3), min(len(seq), idx + 4))
+        win_aa, win_dssp, win_rama, win_ka = [], [], [], []
+        for pos in positions:
+            win_aa.append(seq[pos])
             if dssp is not None:
-                exp_dssp.append(dssp[pos])
+                win_dssp.append(dssp[pos])
             if rama_codes is not None:
-                exp_rama.append(rama_codes[pos])
-            exp_ka.append(ka_codes[pos])
+                win_rama.append(rama_codes[pos])
+            win_ka.append(ka_codes[pos])
+        exp_aa_windows.append(win_aa)
+        exp_aa_flat.extend(win_aa)
+        if win_dssp:
+            exp_dssp_windows.append(win_dssp)
+            exp_dssp_flat.extend(win_dssp)
+        if win_rama:
+            exp_rama_windows.append(win_rama)
+            exp_rama_flat.extend(win_rama)
+        exp_ka_windows.append(win_ka)
+        exp_ka_flat.extend(win_ka)
 
-    return seq, dssp, exp_aa, exp_dssp, rama_codes, ka_codes, exp_rama, exp_ka
+    return (seq, dssp, rama_codes, ka_codes,
+            exp_aa_flat, exp_dssp_flat, exp_rama_flat, exp_ka_flat,
+            exp_aa_windows, exp_dssp_windows, exp_rama_windows, exp_ka_windows)
 
 
-def _make_ngrams_numpy(chars: list[str], n: int,
-                       boundary_stride: int | None = None) -> list[str]:
-    """Fast n-gram construction via numpy char array."""
+def _make_ngrams_numpy(chars: list[str], n: int) -> list[str]:
+    """Fast n-gram construction via numpy char array (whole sequence)."""
     arr = np.array(list(chars), dtype="U1")
     if n == 1:
         return list(arr)
     views = np.stack([arr[i: len(arr) - (n - 1 - i)] for i in range(n)], axis=1)
-    grams = np.apply_along_axis(lambda r: "".join(r), 1, views)
-    if boundary_stride is not None:
-        indices = np.arange(len(grams))
-        keep = (indices % boundary_stride) <= (boundary_stride - n)
-        grams = grams[keep]
-    return list(grams)
+    return list(np.apply_along_axis(lambda r: "".join(r), 1, views))
+
+
+def _make_windowed_ngrams(windows: list[list[str]], n: int) -> list[str]:
+    """Extract n-grams from a list of windows without crossing window boundaries.
+
+    Each window is a list of characters (up to 7 for a ±3 window).
+    n-grams are only formed within a single window.
+    """
+    grams = []
+    for window in windows:
+        arr = np.array(window, dtype="U1")
+        if len(arr) < n:
+            continue
+        views = np.stack([arr[i: len(arr) - (n - 1 - i)] for i in range(n)], axis=1)
+        grams.extend(np.apply_along_axis(lambda r: "".join(r), 1, views))
+    return grams
 
 
 def build_propensity_tables_from_data(proteins_data: dict,
@@ -244,13 +275,17 @@ def build_propensity_tables_from_data(proteins_data: dict,
         for pdb_id in pdb_ids_list
     ]
 
-    exp_aa = []
+    exp_aa_flat = []
+    exp_dssp_flat = []
+    exp_rama_flat = []
+    exp_ka_flat = []
+    exp_aa_windows = []
+    exp_dssp_windows = []
+    exp_rama_windows = []
+    exp_ka_windows = []
     comp_aa = []
-    exp_dssp = []
     comp_dssp = []
-    exp_rama = []
     comp_rama = []
-    exp_ka = []
     comp_ka = []
 
     n_workers = min(8, os.cpu_count() or 1)
@@ -263,81 +298,102 @@ def build_propensity_tables_from_data(proteins_data: dict,
             completed += 1
             if result is None:
                 continue
-            (seq, dssp, p_exp_aa, p_exp_dssp,
-             rama_codes, ka_codes, p_exp_rama, p_exp_ka) = result
+            (seq, dssp, rama_codes, ka_codes,
+             p_exp_aa, p_exp_dssp, p_exp_rama, p_exp_ka,
+             p_win_aa, p_win_dssp, p_win_rama, p_win_ka) = result
             comp_aa.extend(seq)
             if dssp is not None:
                 comp_dssp.extend(dssp)
             if rama_codes is not None:
                 comp_rama.extend(rama_codes)
             comp_ka.extend(ka_codes)
-            exp_aa.extend(p_exp_aa)
-            exp_dssp.extend(p_exp_dssp)
-            exp_rama.extend(p_exp_rama)
-            exp_ka.extend(p_exp_ka)
+            exp_aa_flat.extend(p_exp_aa)
+            exp_dssp_flat.extend(p_exp_dssp)
+            exp_rama_flat.extend(p_exp_rama)
+            exp_ka_flat.extend(p_exp_ka)
+            exp_aa_windows.extend(p_win_aa)
+            exp_dssp_windows.extend(p_win_dssp)
+            exp_rama_windows.extend(p_win_rama)
+            exp_ka_windows.extend(p_win_ka)
             if completed % 50 == 0 or completed == total_pdb:
                 print(f"  Parsed {completed}/{total_pdb} proteins...", flush=True)
 
     pt = PropensityTables(tables_dir)
 
-    if exp_aa and comp_aa:
-        print(f"  Building single_aa table ({len(exp_aa)} exp, {len(comp_aa)} comp)...",
-              flush=True)
-        table = build_propensity_table(exp_aa, comp_aa, n_permutations=n_permutations, use_gpu=use_gpu)
-        pt.save("single_aa", table)
-        print(f"  -> single_aa done: {len(table)} elements", flush=True)
+    if not exp_aa_flat or not comp_aa:
+        raise RuntimeError("No amino acid data collected — check PDB parsing")
+    if not exp_dssp_flat or not comp_dssp:
+        raise RuntimeError("No DSSP data collected — check DSSP is running correctly")
+    if not exp_rama_flat or not comp_rama:
+        raise RuntimeError("No Ramachandran data collected")
+    if not exp_ka_flat or not comp_ka:
+        raise RuntimeError("No Kappa-Alpha data collected")
 
-        exp_di = _make_ngrams_numpy(exp_aa, 2, boundary_stride=7)
-        comp_di = _make_ngrams_numpy(comp_aa, 2)
-        n_di = len(set(exp_di) | set(comp_di))
-        print(f"  Building di_residue table ({len(exp_di)} exp, {len(comp_di)} comp, "
-              f"{n_di} unique elements)...", flush=True)
-        table = build_propensity_table(exp_di, comp_di, n_permutations=n_permutations, use_gpu=use_gpu)
-        pt.save("di_residue", table)
-        print(f"  -> di_residue done: {len(table)} elements", flush=True)
+    # --- single AA ---
+    print(f"  Building single_aa ({len(exp_aa_flat)} exp, {len(comp_aa)} comp)...", flush=True)
+    table = build_propensity_table(exp_aa_flat, comp_aa, n_permutations=n_permutations, use_gpu=use_gpu)
+    pt.save("single_aa", table)
+    print(f"  -> single_aa done: {len(table)} elements", flush=True)
 
-        exp_oligo = _make_ngrams_numpy(exp_aa, 3, boundary_stride=7)
-        comp_oligo = _make_ngrams_numpy(comp_aa, 3)
-        n_oligo = len(set(exp_oligo) | set(comp_oligo))
-        print(f"  Building oligo_residue table ({len(exp_oligo)} exp, {len(comp_oligo)} comp, "
-              f"{n_oligo} unique elements)...", flush=True)
-        table = build_propensity_table(exp_oligo, comp_oligo, n_permutations=n_permutations, use_gpu=use_gpu)
-        pt.save("oligo_residue", table)
-        print(f"  -> oligo_residue done: {len(table)} elements", flush=True)
-    else:
-        for name in ["single_aa", "di_residue", "oligo_residue"]:
-            pt.save(name, {aa: 0.0 for aa in "ACDEFGHIKLMNPQRSTVWY"})
+    # --- di_residue: windowed experimental, whole-sequence background ---
+    exp_di = _make_windowed_ngrams(exp_aa_windows, 2)
+    comp_di = _make_ngrams_numpy(comp_aa, 2)
+    print(f"  Building di_residue ({len(exp_di)} exp, {len(comp_di)} comp, "
+          f"{len(set(exp_di)|set(comp_di))} unique)...", flush=True)
+    table = build_propensity_table(exp_di, comp_di, n_permutations=n_permutations, use_gpu=use_gpu)
+    pt.save("di_residue", table)
+    print(f"  -> di_residue done: {len(table)} elements", flush=True)
 
-    if exp_dssp and comp_dssp:
-        n_dssp = len(set(exp_dssp) | set(comp_dssp))
-        print(f"  Building DSSP table ({len(exp_dssp)} exp, {len(comp_dssp)} comp, "
-              f"{n_dssp} unique elements)...", flush=True)
-        table = build_propensity_table(exp_dssp, comp_dssp, n_permutations=n_permutations, use_gpu=use_gpu)
-        pt.save("dssp", table)
-    else:
-        pt.save("dssp", {ss: 0.0 for ss in "HBEGITSC"})
+    # --- oligo_residue ---
+    exp_oligo = _make_windowed_ngrams(exp_aa_windows, 3)
+    comp_oligo = _make_ngrams_numpy(comp_aa, 3)
+    print(f"  Building oligo_residue ({len(exp_oligo)} exp, {len(comp_oligo)} comp, "
+          f"{len(set(exp_oligo)|set(comp_oligo))} unique)...", flush=True)
+    table = build_propensity_table(exp_oligo, comp_oligo, n_permutations=n_permutations, use_gpu=use_gpu)
+    pt.save("oligo_residue", table)
+    print(f"  -> oligo_residue done: {len(table)} elements", flush=True)
 
-    if exp_rama and comp_rama:
-        n_rama = len(set(exp_rama) | set(comp_rama))
-        print(f"  Building ramachandran table ({len(exp_rama)} exp, {len(comp_rama)} comp, "
-              f"{n_rama} unique elements)...", flush=True)
-        table = build_propensity_table(exp_rama, comp_rama, n_permutations=n_permutations, use_gpu=use_gpu)
-        pt.save("ramachandran", table)
-        print(f"  -> ramachandran done: {len(table)} elements", flush=True)
-    else:
-        print("  WARNING: No Ramachandran codes available, using zeros")
-        pt.save("ramachandran", {chr(65+i): 0.0 for i in range(23)})
+    # --- dssp ---
+    print(f"  Building dssp ({len(exp_dssp_flat)} exp, {len(comp_dssp)} comp)...", flush=True)
+    table = build_propensity_table(exp_dssp_flat, comp_dssp, n_permutations=n_permutations, use_gpu=use_gpu)
+    pt.save("dssp", table)
+    print(f"  -> dssp done: {len(table)} elements", flush=True)
 
-    if exp_ka and comp_ka:
-        n_ka = len(set(exp_ka) | set(comp_ka))
-        print(f"  Building kappa_alpha table ({len(exp_ka)} exp, {len(comp_ka)} comp, "
-              f"{n_ka} unique elements)...", flush=True)
-        table = build_propensity_table(exp_ka, comp_ka, n_permutations=n_permutations, use_gpu=use_gpu)
-        pt.save("kappa_alpha", table)
-        print(f"  -> kappa_alpha done: {len(table)} elements", flush=True)
-    else:
-        print("  WARNING: No Kappa-Alpha codes available, using zeros")
-        pt.save("kappa_alpha", {chr(65+i): 0.0 for i in range(23)})
+    exp_di_dssp = _make_windowed_ngrams(exp_dssp_windows, 2)
+    comp_di_dssp = _make_ngrams_numpy(comp_dssp, 2)
+    print(f"  Building di_dssp ({len(exp_di_dssp)} exp, {len(comp_di_dssp)} comp, "
+          f"{len(set(exp_di_dssp)|set(comp_di_dssp))} unique)...", flush=True)
+    table = build_propensity_table(exp_di_dssp, comp_di_dssp, n_permutations=n_permutations, use_gpu=use_gpu)
+    pt.save("di_dssp", table)
+    print(f"  -> di_dssp done: {len(table)} elements", flush=True)
+
+    # --- ramachandran ---
+    print(f"  Building ramachandran ({len(exp_rama_flat)} exp, {len(comp_rama)} comp)...", flush=True)
+    table = build_propensity_table(exp_rama_flat, comp_rama, n_permutations=n_permutations, use_gpu=use_gpu)
+    pt.save("ramachandran", table)
+    print(f"  -> ramachandran done: {len(table)} elements", flush=True)
+
+    exp_di_rama = _make_windowed_ngrams(exp_rama_windows, 2)
+    comp_di_rama = _make_ngrams_numpy(comp_rama, 2)
+    print(f"  Building di_ramachandran ({len(exp_di_rama)} exp, {len(comp_di_rama)} comp, "
+          f"{len(set(exp_di_rama)|set(comp_di_rama))} unique)...", flush=True)
+    table = build_propensity_table(exp_di_rama, comp_di_rama, n_permutations=n_permutations, use_gpu=use_gpu)
+    pt.save("di_ramachandran", table)
+    print(f"  -> di_ramachandran done: {len(table)} elements", flush=True)
+
+    # --- kappa_alpha ---
+    print(f"  Building kappa_alpha ({len(exp_ka_flat)} exp, {len(comp_ka)} comp)...", flush=True)
+    table = build_propensity_table(exp_ka_flat, comp_ka, n_permutations=n_permutations, use_gpu=use_gpu)
+    pt.save("kappa_alpha", table)
+    print(f"  -> kappa_alpha done: {len(table)} elements", flush=True)
+
+    exp_di_ka = _make_windowed_ngrams(exp_ka_windows, 2)
+    comp_di_ka = _make_ngrams_numpy(comp_ka, 2)
+    print(f"  Building di_kappa_alpha ({len(exp_di_ka)} exp, {len(comp_di_ka)} comp, "
+          f"{len(set(exp_di_ka)|set(comp_di_ka))} unique)...", flush=True)
+    table = build_propensity_table(exp_di_ka, comp_di_ka, n_permutations=n_permutations, use_gpu=use_gpu)
+    pt.save("di_kappa_alpha", table)
+    print(f"  -> di_kappa_alpha done: {len(table)} elements", flush=True)
 
     pt.load()
     print("  Propensity tables built and saved.")
@@ -437,8 +493,9 @@ def main():
     print("=" * 60)
 
     use_gpu = not args.no_gpu
-    required_tables = ["single_aa", "di_residue", "oligo_residue", "dssp",
-                       "ramachandran", "kappa_alpha"]
+    required_tables = ["single_aa", "di_residue", "oligo_residue",
+                       "dssp", "di_dssp", "ramachandran", "di_ramachandran",
+                       "kappa_alpha", "di_kappa_alpha"]
 
     def _table_needs_rebuild(name):
         path = args.tables_dir / f"{name}.json"

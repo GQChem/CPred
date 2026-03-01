@@ -16,9 +16,12 @@ TABLE_NAMES = [
     "single_aa",       # Single amino acid propensity
     "di_residue",      # Di-residue (pair) propensity
     "oligo_residue",   # Oligo-residue (triplet) propensity
-    "dssp",            # DSSP secondary structure propensity
-    "ramachandran",    # Ramachandran code propensity
-    "kappa_alpha",     # Kappa-alpha code propensity
+    "dssp",            # DSSP secondary structure propensity (single code)
+    "di_dssp",         # DSSP di-code propensity (coupled pair)
+    "ramachandran",    # Ramachandran code propensity (single code)
+    "di_ramachandran", # Ramachandran di-code propensity (coupled pair)
+    "kappa_alpha",     # Kappa-alpha code propensity (single code)
+    "di_kappa_alpha",  # Kappa-alpha di-code propensity (coupled pair)
 ]
 
 
