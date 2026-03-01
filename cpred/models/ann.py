@@ -34,13 +34,19 @@ if HAS_TORCH:
 
         def __init__(self, n_features: int = 46):
             super().__init__()
-            hidden = max(round(math.sqrt(n_features)), 2)
+            # Hidden neurons: Round(sqrt(N_input * N_output)) = Round(sqrt(n_features * 1))
+            hidden = max(round(math.sqrt(n_features * 1)), 2)
             self.net = nn.Sequential(
                 nn.Linear(n_features, hidden),
                 nn.Sigmoid(),
                 nn.Linear(hidden, 1),
                 nn.Sigmoid(),
             )
+            # Initialize weights in [-2, +2] per paper (page 16)
+            for layer in self.net:
+                if isinstance(layer, nn.Linear):
+                    nn.init.uniform_(layer.weight, -2.0, 2.0)
+                    nn.init.uniform_(layer.bias, -2.0, 2.0)
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             return self.net(x).squeeze(-1)
@@ -50,7 +56,7 @@ class CPredANN:
     """ANN classifier for CP site prediction."""
 
     def __init__(self, n_features: int = 46, lr: float = 0.5,
-                 momentum: float = 0.1, n_iterations: int = 10000,
+                 momentum: float = 0.1, n_iterations: int = 5000,
                  n_restarts: int = 5):
         self.n_features = n_features
         self.lr = lr
@@ -70,6 +76,7 @@ class CPredANN:
     def _train_one(self, X_t: 'torch.Tensor', y_t: 'torch.Tensor',
                    seed: int) -> tuple['CPredANNModule', float]:
         """Train a single ANN with given seed. Returns (model, final_loss)."""
+        torch.manual_seed(seed)
         model = CPredANNModule(self.n_features).to(self.device)
         optimizer = torch.optim.SGD(
             model.parameters(), lr=self.lr, momentum=self.momentum)
