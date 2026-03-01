@@ -77,19 +77,48 @@ def compute_bfactor(protein: ProteinStructure) -> np.ndarray:
 def compute_hbond_count(protein: ProteinStructure) -> np.ndarray:
     """Count of backbone hydrogen bonds per residue from DSSP.
 
-    Uses DSSP secondary structure as proxy: H/G/I residues participate in
-    backbone H-bonds (helices = 2 H-bonds, sheets = 1-2).
+    Uses actual H-bond counts parsed from DSSP output when available.
     """
     if protein.dssp is None:
         return np.full(protein.n_residues, np.nan)
 
-    hbond_count = np.zeros(protein.n_residues)
-    for i, ss in enumerate(protein.dssp.ss):
-        if ss in ("H", "G", "I"):
-            hbond_count[i] = 2.0  # helical residues have ~2 backbone H-bonds
-        elif ss in ("E", "B"):
-            hbond_count[i] = 1.0  # sheet/bridge residues have ~1-2
-    return hbond_count
+    return protein.dssp.nhbond.copy()
+
+
+def compute_avg_distance_to_buried(protein: ProteinStructure) -> np.ndarray:
+    """Average distance from each CA to buried residues (RSA < 10%).
+
+    DIS_b in the paper (Figure 3K). Uses harmonic mean of distances.
+    """
+    if protein.dssp is None:
+        return np.full(protein.n_residues, np.nan)
+    buried_mask = protein.dssp.rsa < 0.10
+    if not np.any(buried_mask):
+        return np.zeros(protein.n_residues)
+    target_coords = protein.ca_coords[buried_mask]
+    dist_matrix = cdist(protein.ca_coords, target_coords)
+    dist_matrix = np.maximum(dist_matrix, 1e-6)
+    # Harmonic mean: n / sum(1/d)
+    n_targets = dist_matrix.shape[1]
+    inv_sum = np.sum(1.0 / dist_matrix, axis=1)
+    return n_targets / inv_sum
+
+
+def compute_avg_distance_to_hydrophobic(protein: ProteinStructure) -> np.ndarray:
+    """Average distance from each CA to hydrophobic residues.
+
+    DIS_hpho in the paper (Figure 3L). Uses harmonic mean of distances.
+    """
+    hpho_mask = np.array([protein.is_hydrophobic(i)
+                          for i in range(protein.n_residues)])
+    if not np.any(hpho_mask):
+        return np.zeros(protein.n_residues)
+    target_coords = protein.ca_coords[hpho_mask]
+    dist_matrix = cdist(protein.ca_coords, target_coords)
+    dist_matrix = np.maximum(dist_matrix, 1e-6)
+    n_targets = dist_matrix.shape[1]
+    inv_sum = np.sum(1.0 / dist_matrix, axis=1)
+    return n_targets / inv_sum
 
 
 def extract_tertiary_features(protein: ProteinStructure) -> dict[str, np.ndarray]:
@@ -106,4 +135,6 @@ def extract_tertiary_features(protein: ProteinStructure) -> dict[str, np.ndarray
         "depth": compute_depth(protein),
         "bfactor": compute_bfactor(protein),
         "hbond": compute_hbond_count(protein),
+        "dis_b": compute_avg_distance_to_buried(protein),
+        "dis_hpho": compute_avg_distance_to_hydrophobic(protein),
     }

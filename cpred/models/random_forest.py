@@ -19,7 +19,7 @@ class CPredRandomForest:
         self.model = RandomForestClassifier(
             n_estimators=n_estimators,
             criterion="entropy",
-            max_features=0.5,
+            max_features=None,  # use all features per split (C4.5 style)
             random_state=random_state,
             n_jobs=-1,
         )

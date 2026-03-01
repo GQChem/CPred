@@ -91,7 +91,8 @@ def parse_dataset_t(csv_path: Path) -> dict:
 
 def _extract_features_worker(args):
     """Worker: parse PDB, extract features, return (X, y) or (None, reason)."""
-    pdb_id, info, pdb_path_str, tables = args
+    pdb_id, info, pdb_path_str, tables = args[:4]
+    rmsf_dir = args[4] if len(args) > 4 else None
     pdb_path = Path(pdb_path_str)
     if not pdb_path.exists():
         return None, f"{pdb_id}: PDB file not found"
@@ -100,7 +101,7 @@ def _extract_features_worker(args):
     except Exception as e:
         return None, f"{pdb_id}: parse error: {e}"
 
-    X = extract_features_for_protein(protein, tables)
+    X = extract_features_for_protein(protein, tables, rmsf_dir=rmsf_dir)
     if X is None:
         return None, f"{pdb_id}: feature extraction failed"
 
@@ -120,7 +121,8 @@ def _extract_features_dataset_t_worker(args):
     Returns (X_labeled, y_labeled, pdb_id) where only the 176 labeled positions
     are included.
     """
-    pdb_id, info, pdb_path_str, tables = args
+    pdb_id, info, pdb_path_str, tables = args[:4]
+    rmsf_dir = args[4] if len(args) > 4 else None
     pdb_path = Path(pdb_path_str)
     if not pdb_path.exists():
         return None, f"{pdb_id}: PDB file not found"
@@ -129,7 +131,7 @@ def _extract_features_dataset_t_worker(args):
     except Exception as e:
         return None, f"{pdb_id}: parse error: {e}"
 
-    X = extract_features_for_protein(protein, tables)
+    X = extract_features_for_protein(protein, tables, rmsf_dir=rmsf_dir)
     if X is None:
         return None, f"{pdb_id}: feature extraction failed"
 
@@ -158,10 +160,11 @@ def _extract_features_dataset_t_worker(args):
 
 
 def extract_features_for_protein(protein: ProteinStructure,
-                                  tables: PropensityTables) -> np.ndarray | None:
+                                  tables: PropensityTables,
+                                  rmsf_dir=None) -> np.ndarray | None:
     """Extract and standardize all features for one protein."""
     try:
-        features = extract_all_features(protein, tables)
+        features = extract_all_features(protein, tables, rmsf_dir=rmsf_dir)
         features = standardize_features(features)
         return build_feature_matrix(features)
     except Exception as e:
@@ -355,6 +358,10 @@ def main():
                         help="Number of permutations for propensity p-values (Lo et al. 2012)")
     parser.add_argument("--batch-size", type=int, default=50,
                         help="Process proteins in batches")
+    parser.add_argument("--rmsf-dir", type=Path, default=None,
+                        help="Directory with per-protein RMSF CSV files from CABSflex "
+                             "(one file per protein: {pdb_id}.csv with columns "
+                             "residue_number,rmsf)")
     args = parser.parse_args()
 
     supp_dir = args.data_dir / "supplementary"
@@ -474,8 +481,9 @@ def main():
     skipped = 0
 
     pdb_ids = list(dataset_t.keys())
+    rmsf_dir = str(args.rmsf_dir) if args.rmsf_dir else None
     worker_args = [
-        (pdb_id, dataset_t[pdb_id], str(pdb_dir / f"{pdb_id}.pdb"), tables)
+        (pdb_id, dataset_t[pdb_id], str(pdb_dir / f"{pdb_id}.pdb"), tables, rmsf_dir)
         for pdb_id in pdb_ids
     ]
 
@@ -553,7 +561,7 @@ def main():
     if dhfr_path.exists() and dhfr_csv.exists():
         try:
             dhfr = parse_pdb(dhfr_path, chain_id="A")
-            X_dhfr = extract_features_for_protein(dhfr, tables)
+            X_dhfr = extract_features_for_protein(dhfr, tables, rmsf_dir=rmsf_dir)
 
             if X_dhfr is not None:
                 # Get DHFR labels

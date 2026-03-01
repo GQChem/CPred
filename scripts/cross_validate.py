@@ -109,6 +109,8 @@ def main():
     parser.add_argument("--n-permutations", type=int, default=99999,
                         help="Number of permutations for propensity p-values (Lo et al. 2012)")
     parser.add_argument("--skip-download", action="store_true")
+    parser.add_argument("--rmsf-dir", type=Path, default=None,
+                        help="Directory with per-protein RMSF CSVs from CABSflex")
     args = parser.parse_args()
 
     supp_dir = args.data_dir / "supplementary"
@@ -197,8 +199,9 @@ def main():
     print("=" * 60)
 
     pdb_ids = list(dataset_t.keys())
+    rmsf_dir = str(args.rmsf_dir) if args.rmsf_dir else None
     worker_args = [
-        (pdb_id, dataset_t[pdb_id], str(pdb_dir / f"{pdb_id}.pdb"), tables)
+        (pdb_id, dataset_t[pdb_id], str(pdb_dir / f"{pdb_id}.pdb"), tables, rmsf_dir)
         for pdb_id in pdb_ids
     ]
 
@@ -253,7 +256,7 @@ def main():
             ensemble.fit(X_all, y_all, feature_names=FEATURE_NAMES)
 
             dhfr = parse_pdb(dhfr_path, chain_id="A")
-            X_dhfr = extract_features_for_protein(dhfr, tables)
+            X_dhfr = extract_features_for_protein(dhfr, tables, rmsf_dir=rmsf_dir)
 
             if X_dhfr is not None:
                 dhfr_df = pd.read_csv(dhfr_csv)

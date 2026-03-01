@@ -30,7 +30,7 @@ class DSSPResult:
     rsa: np.ndarray         # relative solvent accessibility
     phi: np.ndarray         # phi angles
     psi: np.ndarray         # psi angles
-    nhbond_energy: list[tuple[int, float]]  # H-bond info
+    nhbond: np.ndarray      # number of backbone H-bonds per residue (int)
 
 
 @dataclass
@@ -126,7 +126,10 @@ def run_dssp(pdb_path: Path, model, chain_id: str,
     rsa = np.zeros(n)
     phi = np.full(n, np.nan)
     psi = np.full(n, np.nan)
-    nhbond = [(0, 0.0)] * n
+    # Track H-bond partners: each residue can donate NH->O and accept O<-HN
+    # DSSP provides 4 H-bond columns: NH->O(1), O->NH(1), NH->O(2), O->NH(2)
+    # Each has (partner_offset, energy). A bond exists if energy < -0.5 kcal/mol
+    hbond_count = np.zeros(n, dtype=np.float64)
 
     # Build lookup from (chain, resid) -> index
     res_lookup = {}
@@ -136,8 +139,6 @@ def run_dssp(pdb_path: Path, model, chain_id: str,
 
     for dssp_key in dssp.keys():
         chain, res_id = dssp_key[0], dssp_key[1]
-        lookup_key = (chain, (" ", res_id[1], res_id[2]) if len(res_id) == 3
-                       else res_id)
         # Try direct match
         idx = res_lookup.get((chain, res_id))
         if idx is None:
@@ -155,7 +156,27 @@ def run_dssp(pdb_path: Path, model, chain_id: str,
         phi[idx] = dssp_data[4]
         psi[idx] = dssp_data[5]
 
-    return DSSPResult(ss=ss, rsa=rsa, phi=phi, psi=psi, nhbond_energy=nhbond)
+        # Count H-bonds from DSSP data
+        # BioPython DSSP tuple: (dssp_idx, aa, ss, rsa, phi, psi,
+        #   NH_O_1_relidx, NH_O_1_energy, O_NH_1_relidx, O_NH_1_energy,
+        #   NH_O_2_relidx, NH_O_2_energy, O_NH_2_relidx, O_NH_2_energy)
+        # Energy indices: 7, 9, 11, 13 — bond exists if energy < -0.5 kcal/mol
+        try:
+            n_bonds = 0
+            for hb_idx in (7, 9, 11, 13):
+                if hb_idx < len(dssp_data):
+                    energy = dssp_data[hb_idx]
+                    if isinstance(energy, (int, float)) and energy < -0.5:
+                        n_bonds += 1
+            hbond_count[idx] = float(n_bonds)
+        except (IndexError, TypeError):
+            # Fallback: estimate from SS type
+            if ss[idx] in ("H", "G", "I"):
+                hbond_count[idx] = 2.0
+            elif ss[idx] in ("E", "B"):
+                hbond_count[idx] = 1.0
+
+    return DSSPResult(ss=ss, rsa=rsa, phi=phi, psi=psi, nhbond=hbond_count)
 
 
 def parse_pdb(pdb_path: str | Path, chain_id: str = "A",

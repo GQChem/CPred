@@ -4,7 +4,17 @@ Some features have inverted polarity (low value = more viable for CP).
 These are inverted before Z-score normalization so that higher values
 consistently indicate higher CP viability.
 
-Features to invert: CN, WCN, closeness, H-bonds, farness measures, depth.
+Features to invert (per Table S2 in Lo et al. 2012):
+  - CN, WCN, closeness: packed environment → disfavored
+  - H-bonds: more H-bonds → disfavored (buried)
+  - Depth (DPX): deeper → disfavored
+  - DIS_b, DIS_hpho: average distance to buried/hydrophobic (lower → closer to core)
+
+Features NOT inverted (high = more viable):
+  - RSA: high solvent accessibility → favored
+  - CM: far from center → favored
+  - B-factor, GNM-F: high flexibility → favored
+  - Farness (Fb, Fhpho, F_union, F_inter): high farness from core → favored
 """
 
 from __future__ import annotations
@@ -12,12 +22,16 @@ from __future__ import annotations
 import numpy as np
 
 # Features where low value correlates with CP viability (need inversion)
-# These are base names — expanded window variants (e.g. closeness_m3) also match.
+# These are base names — window-expanded variants (e.g. closeness_m3) also match.
 _INVERT_BASE = {
     "cn", "wcn", "closeness", "hbond",
-    "farness_buried", "farness_hydrophobic", "farness_sum", "farness_product",
     "depth",
+    "dis_b", "dis_hpho",
 }
+
+# Features that should NOT be inverted (high = more viable):
+# rsa, cm, bfactor, gnm_msf, farness_buried, farness_hydrophobic,
+# farness_union, farness_inter
 
 
 def _should_invert(name: str) -> bool:
@@ -29,7 +43,6 @@ def _should_invert(name: str) -> bool:
     return base in _INVERT_BASE
 
 
-# Keep the old name for backward compat
 FEATURES_TO_INVERT = _INVERT_BASE
 
 
