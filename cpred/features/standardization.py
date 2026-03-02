@@ -30,7 +30,7 @@ _INVERT_BASE = {
 }
 
 # Features that should NOT be inverted (high = more viable):
-# rsa, cm, bfactor, gnm_msf, farness_buried, farness_hydrophobic,
+# rsa, cm, gnm_msf, farness_buried, farness_hydrophobic,
 # farness_union, farness_inter
 
 

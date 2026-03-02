@@ -6,7 +6,6 @@ Per-residue features:
   - WCN (weighted contact number: sum of 1/d² over all CA pairs)
   - CM (distance to centroid of all CA atoms)
   - Depth (distance to nearest surface atom, RSA > 20%)
-  - B-factor (from PDB)
   - H-bond count (from DSSP)
 """
 
@@ -69,11 +68,6 @@ def compute_depth(protein: ProteinStructure) -> np.ndarray:
     return dist_to_surface.min(axis=1)
 
 
-def compute_bfactor(protein: ProteinStructure) -> np.ndarray:
-    """B-factor (temperature factor) of CA atoms."""
-    return protein.bfactors.copy()
-
-
 def compute_hbond_count(protein: ProteinStructure) -> np.ndarray:
     """Count of backbone hydrogen bonds per residue from DSSP."""
     if protein.dssp is None:
@@ -130,7 +124,6 @@ def extract_tertiary_features(protein: ProteinStructure) -> dict[str, np.ndarray
         "wcn": compute_weighted_contact_number(protein),
         "cm": compute_distance_to_centroid(protein),
         "depth": compute_depth(protein),
-        "bfactor": compute_bfactor(protein),
         "hbond": compute_hbond_count(protein),
         "dis_b": compute_avg_distance_to_buried(protein),
         "dis_hpho": compute_avg_distance_to_hydrophobic(protein),

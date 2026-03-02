@@ -1,0 +1,232 @@
+LIBCIFPP_DATA_DIR has been set to: /home/gquarg/data/conda/envs/topology/share/libcifpp
+============================================================
+STEP 1: Parsing datasets
+============================================================
+Dataset T: 6 proteins, 76 viable + 100 inviable = 176 sites
+Dataset S3: 760 proteins with 1087 CP sites (for propensity tables)
+
+============================================================
+STEP 2: Downloading PDB structures
+============================================================
+  Progress: 50/760 (downloaded: 50, failed: 0)
+  Progress: 100/760 (downloaded: 100, failed: 0)
+  Progress: 150/760 (downloaded: 150, failed: 0)
+  Progress: 200/760 (downloaded: 200, failed: 0)
+  Progress: 250/760 (downloaded: 250, failed: 0)
+  Progress: 300/760 (downloaded: 300, failed: 0)
+  Progress: 350/760 (downloaded: 350, failed: 0)
+  Progress: 400/760 (downloaded: 400, failed: 0)
+  Progress: 450/760 (downloaded: 450, failed: 0)
+  Progress: 500/760 (downloaded: 500, failed: 0)
+  Progress: 550/760 (downloaded: 550, failed: 0)
+  Progress: 600/760 (downloaded: 600, failed: 0)
+  Progress: 650/760 (downloaded: 650, failed: 0)
+  Progress: 700/760 (downloaded: 700, failed: 0)
+  Progress: 750/760 (downloaded: 750, failed: 0)
+  S3 PDBs - Downloaded: 760, Failed: 0
+  Dataset T PDBs downloaded: ['1gfl', '1a2j', '2b3p', '2b3q', '5mbn', '1pii']
+  Downloading DHFR (1RX4)...
+
+============================================================
+STEP 3: Building propensity tables (from Dataset S3)
+============================================================
+  Missing or incomplete tables: ['single_aa', 'di_residue', 'oligo_residue', 'dssp', 'di_dssp', 'ramachandran', 'di_ramachandran', 'kappa_alpha', 'di_kappa_alpha']
+Building propensity tables from training data...
+  Parsing 760 PDB files with 8 workers...
+  Parsed 50/760 proteins...
+  Parsed 100/760 proteins...
+  Parsed 150/760 proteins...
+  Parsed 200/760 proteins...
+  Parsed 250/760 proteins...
+  Parsed 300/760 proteins...
+  Parsed 350/760 proteins...
+  Parsed 400/760 proteins...
+  Parsed 450/760 proteins...
+  Parsed 500/760 proteins...
+  Parsed 550/760 proteins...
+  Parsed 600/760 proteins...
+  Parsed 650/760 proteins...
+  Parsed 700/760 proteins...
+  Parsed 750/760 proteins...
+  Parsed 760/760 proteins...
+  Building single_aa (6432 exp, 144560 comp)...
+    CPU mode (20 elements, 99999 permutations)
+    CPU: generating 99999 permutations of 150992 elements...
+    CPU: processed elements 20/20
+  -> single_aa done: 20 elements
+  Building di_residue (5513 exp, 144559 comp, 400 unique)...
+    CPU mode (400 elements, 99999 permutations)
+    CPU: generating 99999 permutations of 150072 elements...
+    CPU: processed elements 400/400
+  -> di_residue done: 400 elements
+  Building oligo_residue (4594 exp, 144558 comp, 7832 unique)...
+    CPU mode (7832 elements, 99999 permutations)
+    CPU: generating 99999 permutations of 149152 elements...
+    CPU: processed elements 512/7832
+    CPU: processed elements 1024/7832
+    CPU: processed elements 1536/7832
+    CPU: processed elements 2048/7832
+    CPU: processed elements 2560/7832
+    CPU: processed elements 3072/7832
+    CPU: processed elements 3584/7832
+    CPU: processed elements 4096/7832
+    CPU: processed elements 4608/7832
+    CPU: processed elements 5120/7832
+    CPU: processed elements 5632/7832
+    CPU: processed elements 6144/7832
+    CPU: processed elements 6656/7832
+    CPU: processed elements 7168/7832
+    CPU: processed elements 7680/7832
+    CPU: processed elements 7832/7832
+  -> oligo_residue done: 7832 elements
+  Building dssp (6432 exp, 144560 comp)...
+    CPU mode (9 elements, 99999 permutations)
+    CPU: generating 99999 permutations of 150992 elements...
+    CPU: processed elements 9/9
+  -> dssp done: 9 elements
+  Building di_dssp (5513 exp, 144559 comp, 74 unique)...
+    CPU mode (74 elements, 99999 permutations)
+    CPU: generating 99999 permutations of 150072 elements...
+    CPU: processed elements 74/74
+  -> di_dssp done: 74 elements
+  Building ramachandran (6432 exp, 144560 comp)...
+    CPU mode (23 elements, 99999 permutations)
+    CPU: generating 99999 permutations of 150992 elements...
+    CPU: processed elements 23/23
+  -> ramachandran done: 23 elements
+  Building di_ramachandran (5513 exp, 144559 comp, 528 unique)...
+    CPU mode (528 elements, 99999 permutations)
+    CPU: generating 99999 permutations of 150072 elements...
+    CPU: processed elements 512/528
+    CPU: processed elements 528/528
+  -> di_ramachandran done: 528 elements
+  Building kappa_alpha (6432 exp, 144560 comp)...
+    CPU mode (23 elements, 99999 permutations)
+    CPU: generating 99999 permutations of 150992 elements...
+    CPU: processed elements 23/23
+  -> kappa_alpha done: 23 elements
+  Building di_kappa_alpha (5513 exp, 144559 comp, 471 unique)...
+    CPU mode (471 elements, 99999 permutations)
+    CPU: generating 99999 permutations of 150072 elements...
+    CPU: processed elements 471/471
+  -> di_kappa_alpha done: 471 elements
+  Propensity tables built and saved.
+
+============================================================
+STEP 4: Extracting features (Dataset T proteins only)
+============================================================
+  1gfl: 20 labeled sites (9 viable, 11 inviable), RMSF nonzero=20/20
+  1a2j: 22 labeled sites (11 viable, 11 inviable), RMSF nonzero=22/22
+  2b3p: 14 labeled sites (13 viable, 1 inviable), RMSF nonzero=14/14
+  2b3q: 14 labeled sites (3 viable, 11 inviable), RMSF nonzero=14/14
+  5mbn: 64 labeled sites (6 viable, 58 inviable), RMSF nonzero=64/64
+  1pii: 42 labeled sites (34 viable, 8 inviable), RMSF nonzero=42/42
+  Processed: 6, Skipped: 0
+
+  Training matrix: (176, 50)
+  Feature names (50): ['R_aa', 'R_aac3', 'R_aac5', '2R_aa', '2R_aac3']...['farness_hydrophobic', 'farness_union', 'farness_inter']
+  Positive (viable CP sites): 76
+  Negative (inviable CP sites): 100
+  Ratio: 1:1.3
+  (No downsampling needed — Dataset T is naturally balanced)
+
+  Feature means (viable vs inviable):
+    Cat A (seq propensity):  viable=0.1926  inviable=-0.0257
+    Cat B (SS propensity):   viable=0.3527  inviable=-0.1274
+    Cat C (tertiary):        viable=0.3398  inviable=-0.2989
+    R_aa                : viable=+0.298  inviable=+0.054  diff=+0.245
+    RxR_aac3            : viable=+0.024  inviable=+0.033  diff=-0.009
+    rsa                 : viable=+0.650  inviable=-0.184  diff=+0.834
+    farness_buried      : viable=+0.465  inviable=-0.308  diff=+0.772
+    rmsf                : viable=+0.610  inviable=-0.168  diff=+0.777
+    gnm_msf             : viable=+0.448  inviable=-0.213  diff=+0.661
+
+============================================================
+STEP 5: Training final ensemble model
+============================================================
+Training Random Forest...
+Training SVM...
+Training ANN...
+Training Hierarchical model...
+Ensemble training complete.
+
+Ensemble training set metrics:
+  auc: 0.9988
+  sensitivity: 0.9868
+  specificity: 0.9900
+  accuracy: 0.9886
+  mcc: 0.9768
+  threshold: 0.6262
+
+  RF metrics:
+    auc: 1.0000
+    sensitivity: 1.0000
+    specificity: 1.0000
+    accuracy: 1.0000
+    mcc: 1.0000
+    threshold: 0.7300
+
+  SVM metrics:
+    auc: 0.9357
+    sensitivity: 0.9342
+    specificity: 0.7600
+    accuracy: 0.8352
+    mcc: 0.6899
+    threshold: 0.3660
+
+  ANN metrics:
+    auc: 0.9934
+    sensitivity: 0.9868
+    specificity: 0.9600
+    accuracy: 0.9716
+    mcc: 0.9429
+    threshold: 0.7439
+
+  HI metrics:
+    auc: 0.1847
+    sensitivity: 1.0000
+    specificity: 0.0000
+    accuracy: 0.4318
+    mcc: 0.0000
+    threshold: 0.0000
+
+Models saved to cpred/data/trained_models
+
+============================================================
+STEP 6: Independent test on DHFR (1RX4)
+============================================================
+
+  DHFR results (159 sites, 86 viable, 73 inviable):
+    auc: 0.7853
+    sensitivity: 0.7907
+    specificity: 0.7123
+    accuracy: 0.7547
+    mcc: 0.5050
+    threshold: 0.3448
+    [RF ] AUC=0.8155  Sens=0.733  Spec=0.795  MCC=0.525
+    [SVM] AUC=0.7528  Sens=0.814  Spec=0.644  MCC=0.466
+    [ANN] AUC=0.7077  Sens=0.756  Spec=0.685  MCC=0.442
+    [HI ] AUC=0.2276  Sens=1.000  Spec=0.000  MCC=0.000
+
+  Paper reference (DHFR independent test):
+    AUC:         0.906
+    Sensitivity: 0.709
+    Specificity: 0.918
+    MCC:         0.633
+
+  Top 10 predicted CP sites:
+   Res#  AA   Prob
+     17   E 0.8440
+     18   N 0.8413
+     70   D 0.8362
+     36   L 0.8003
+     35   T 0.7736
+    147   N 0.7730
+     69   D 0.7702
+     37   D 0.7699
+     64   S 0.7695
+    146   Q 0.7658
+
+============================================================
+TRAINING COMPLETE!
+============================================================

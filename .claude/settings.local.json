@@ -21,7 +21,10 @@
       "Bash(pip install:*)",
       "Bash(tasklist:*)",
       "Bash(git:*)",
-      "WebFetch(domain:www.biorxiv.org)"
+      "WebFetch(domain:www.biorxiv.org)",
+      "Bash(pdfinfo:*)",
+      "Bash(/c/Users/gianl/AppData/Local/Programs/Python/Python310/python:*)",
+      "Bash(pdftotext:*)"
     ]
   }
 }

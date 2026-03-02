@@ -114,9 +114,8 @@ def run_dssp(pdb_path: Path, model, chain_id: str,
     _ensure_dssp_env()
     try:
         dssp = DSSP(model, str(pdb_path), dssp="mkdssp")
-    except Exception:
-        except Exception as e:
-            raise RuntimeError(f"DSSP failed for {pdb_path}: {e}") from e
+    except Exception as e:
+        raise RuntimeError(f"DSSP failed for {pdb_path}: {e}") from e
 
     n = len(residues)
     ss = ["C"] * n

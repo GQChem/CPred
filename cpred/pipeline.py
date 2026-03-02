@@ -5,9 +5,9 @@ Orchestrates: PDB parsing -> feature extraction -> standardization -> prediction
 The features are organized into three categories (per Lo et al. 2012):
   Category A (sequence propensity): 19 coupled-residue propensity features
   Category B (SS propensity):       15 coupled-SS propensity features
-  Category C (tertiary structure):  16 window-averaged structural features
+  Category C (tertiary structure):  15 window-averaged structural features
 
-Total: 19 + 15 + 16 = 50 features
+Total: 19 + 15 + 15 = 49 features
 """
 
 from __future__ import annotations
@@ -47,21 +47,20 @@ CAT_B_FEATURES = [
     "R_ka",  "2R_ka",  "RxR_ka",  "R2xR_ka",  "R3xR_ka",
 ]
 
-# Category C: all 16 tertiary structural features (window-averaged)
-# Per Lo et al. 2012, Table 1 and Figure 3:
-#   RSA, DPX(depth), CM, H-bonds, closeness, CN, WCN, B-factor,
-#   GNM-F, DIS_b, DIS_hpho, Fb(farness_buried), Fhpho(farness_hydrophobic),
-#   Fb∪Fhpho(farness_union), Fb∩Fhpho(farness_inter), + bfactor already counted
-# Note: paper lists RMSF+ separately but we use GNM-F as proxy (same as paper's approach)
+# Category C: 15 tertiary structural features (window-averaged)
+# Per Lo et al. 2012 Table S2 (included features, exclusion reason checked):
+#   RSA+, DPX+, CM+, H-bonds+, Closeness, CN, WCN, GNM-F,
+#   DIS_b+, DIS_hpho, Fb+, Fhpho, RMSF+
+#   farness_union, farness_inter (Fb∪hpho+, Fb∩hpho+ — included in our model)
+# B-factor excluded per Table S2 (reason B: AUC < 0.65)
 CAT_C_FEATURES = [
-    "rsa",                    # RSA (relative solvent accessibility)
+    "rsa",                    # RSA+ (relative solvent accessibility)
     "depth",                  # DPX+ (distance to surface)
     "cm",                     # CM+ (distance to centroid)
     "hbond",                  # H-bonds+
     "closeness",              # Closeness centrality
     "cn",                     # CN (contact number)
     "wcn",                    # WCN (weighted contact number)
-    "bfactor",                # B-factor
     "rmsf",                   # RMSF+ (from CABSflex coarse-grained MD)
     "gnm_msf",                # GNM-F (Gaussian Network Model fluctuation)
     "dis_b",                  # DIS_b+ (avg distance to buried residues)
@@ -75,7 +74,7 @@ CAT_C_FEATURES = [
 # Full canonical feature order
 FEATURE_NAMES = CAT_A_FEATURES + CAT_B_FEATURES + CAT_C_FEATURES
 
-NUM_FEATURES = len(FEATURE_NAMES)  # 50
+NUM_FEATURES = len(FEATURE_NAMES)  # 49
 
 # Feature groups for the HI model (matching Figure 4 categories)
 FEATURE_GROUPS = {
@@ -88,7 +87,7 @@ FEATURE_GROUPS = {
     "awayhpho": ["farness_hydrophobic", "dis_hpho"],      # Awayhpho
     "hbonds": ["hbond"],                # Nhbonds
     "uncrowd": ["wcn", "cn", "closeness"],  # Uncrowd
-    "dynamics": ["gnm_msf", "rmsf", "bfactor"],           # Flex
+    "dynamics": ["gnm_msf", "rmsf"],                       # Flex
     # Extra Cat C not in the 46 but we keep them
     "extra": ["farness_union", "farness_inter"],
 }
@@ -248,7 +247,7 @@ def extract_all_features(protein: ProteinStructure,
 
     cat_c = {}
     # Include all tertiary features
-    for key in ["rsa", "depth", "cm", "hbond", "cn", "wcn", "bfactor",
+    for key in ["rsa", "depth", "cm", "hbond", "cn", "wcn",
                 "dis_b", "dis_hpho"]:
         if key in tert_feats:
             cat_c[key] = tert_feats[key]

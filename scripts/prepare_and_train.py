@@ -54,17 +54,36 @@ def download_pdb(pdb_id: str, pdb_dir: Path, timeout: int = 30) -> Path | None:
         return None
 
 
-def parse_dataset_s3(supp_dir: Path) -> dict:
-    """Parse Dataset S3 -> {pdb_id: {chain, sites: [int]}}."""
-    ds3 = pd.read_excel(supp_dir / "Dataset_S3.xls")
+def parse_dataset_s4(supp_dir: Path) -> dict:
+    """Parse Dataset S4 (nrCPsitecpdb-40) -> {pdb_id: {chain, sites: [int]}}.
+
+    Dataset S4 contains 1087 non-redundant viable CP sites from nrCPDB-40.
+    These form the EXPERIMENTAL group for propensity table construction.
+    """
+    ds4 = pd.read_csv(supp_dir / "Dataset_S4.csv")
     proteins = defaultdict(lambda: {"chain": "A", "sites": []})
-    for _, row in ds3.iterrows():
+    for _, row in ds4.iterrows():
         pdb_id = str(row["PDB ID"]).strip().lower()
         chain = str(row["Chain"]).strip() if pd.notna(row["Chain"]) else "A"
         site = int(row["CP site"])
         proteins[pdb_id]["chain"] = chain
         proteins[pdb_id]["sites"].append(site)
     return dict(proteins)
+
+
+def parse_dataset_s2(supp_dir: Path) -> dict:
+    """Parse Dataset S2 (nrCPDB-40) -> {pdb_id: chain}.
+
+    Dataset S2 contains 1059 non-redundant proteins from nrCPDB-40.
+    Their WHOLE SEQUENCES form the COMPARISON group for propensity tables.
+    """
+    ds2 = pd.read_csv(supp_dir / "Dataset_S2.csv")
+    proteins = {}
+    for _, row in ds2.iterrows():
+        pdb_id = str(row["PDB ID"]).strip().lower()
+        chain = str(row["Chain"]).strip() if pd.notna(row["Chain"]) else "A"
+        proteins[pdb_id] = chain
+    return proteins
 
 
 def parse_dataset_t(csv_path: Path) -> dict:
@@ -172,7 +191,11 @@ def extract_features_for_protein(protein: ProteinStructure,
 
 
 def _parse_one_protein(args):
-    """Worker: parse one PDB and return sequence/DSSP/structural codes/CP-site data."""
+    """Worker: parse one PDB (experimental group) and return CP-site windows + whole sequence.
+
+    Used for Dataset S4 proteins (nrCPsitecpdb-40): extracts ±3-residue windows
+    around each CP site (experimental group) AND the whole sequence (comparison group).
+    """
     pdb_id, info, pdb_path_str = args
     pdb_path = Path(pdb_path_str)
     if not pdb_path.exists():
@@ -232,6 +255,31 @@ def _parse_one_protein(args):
             exp_aa_windows, exp_dssp_windows, exp_rama_windows, exp_ka_windows)
 
 
+def _parse_one_protein_comp(args):
+    """Worker: parse one PDB (comparison group) and return whole-sequence data only.
+
+    Used for Dataset S2 proteins (nrCPDB-40) that are NOT in Dataset S4:
+    their whole sequences contribute only to the comparison group.
+    """
+    pdb_id, chain, pdb_path_str = args
+    pdb_path = Path(pdb_path_str)
+    if not pdb_path.exists():
+        return None
+    try:
+        protein = parse_pdb(pdb_path, chain_id=chain)
+    except Exception:
+        return None
+
+    seq = protein.sequence
+    dssp = list(protein.dssp.ss) if protein.dssp is not None else None
+    rama_codes = None
+    if protein.dssp is not None:
+        rama_codes = assign_ramachandran_codes(protein.dssp.phi, protein.dssp.psi)
+    ka_codes = assign_kappa_alpha_codes(protein.ca_coords)
+
+    return (seq, dssp, rama_codes, ka_codes)
+
+
 def _make_ngrams_numpy(chars: list[str], n: int) -> list[str]:
     """Fast n-gram construction via numpy char array (whole sequence)."""
     arr = np.array(list(chars), dtype="U1")
@@ -257,22 +305,36 @@ def _make_windowed_ngrams(windows: list[list[str]], n: int) -> list[str]:
     return grams
 
 
-def build_propensity_tables_from_data(proteins_data: dict,
+def build_propensity_tables_from_data(proteins_s4: dict,
+                                       proteins_s2: dict,
                                        pdb_dir: Path,
                                        tables_dir: Path,
                                        use_gpu: bool = True,
                                        n_permutations: int = 99999) -> PropensityTables:
     """Build propensity tables from experimental CP sites vs whole sequences.
 
-    Uses Dataset S3 (nrCPDB-40) for propensity table construction per paper.
+    Experimental group: CP site ±3-residue windows from Dataset S4 (nrCPsitecpdb-40,
+        1087 sites from 760 PDB IDs).
+    Comparison group: whole sequences of ALL Dataset S2 proteins (nrCPDB-40,
+        1059 proteins). This is the correct background per Lo et al. 2012.
+
+    Args:
+        proteins_s4: {pdb_id: {chain, sites: [int]}} — experimental (CP sites)
+        proteins_s2: {pdb_id: chain} — comparison (nrCPDB-40 whole sequences)
     """
     print("Building propensity tables from training data...")
 
-    pdb_ids_list = list(proteins_data.keys())
-    total_pdb = len(pdb_ids_list)
-    worker_args = [
-        (pdb_id, proteins_data[pdb_id], str(pdb_dir / f"{pdb_id}.pdb"))
-        for pdb_id in pdb_ids_list
+    # --- Parse experimental proteins (Dataset S4: CP site windows + whole seq) ---
+    s4_args = [
+        (pdb_id, proteins_s4[pdb_id], str(pdb_dir / f"{pdb_id}.pdb"))
+        for pdb_id in proteins_s4
+    ]
+    # S2 proteins NOT already in S4 contribute only to comparison group
+    s4_pdb_ids = set(proteins_s4.keys())
+    s2_only_args = [
+        (pdb_id, proteins_s2[pdb_id], str(pdb_dir / f"{pdb_id}.pdb"))
+        for pdb_id in proteins_s2
+        if pdb_id not in s4_pdb_ids
     ]
 
     exp_aa_flat = []
@@ -289,10 +351,15 @@ def build_propensity_tables_from_data(proteins_data: dict,
     comp_ka = []
 
     n_workers = min(8, os.cpu_count() or 1)
-    print(f"  Parsing {total_pdb} PDB files with {n_workers} workers...", flush=True)
+    total_s4 = len(s4_args)
+    total_s2_only = len(s2_only_args)
+
+    # Parse S4 proteins (experimental + comparison)
+    print(f"  Parsing {total_s4} S4 (experimental) PDB files with {n_workers} workers...",
+          flush=True)
     completed = 0
     with ProcessPoolExecutor(max_workers=n_workers) as executor:
-        futures = {executor.submit(_parse_one_protein, a): a[0] for a in worker_args}
+        futures = {executor.submit(_parse_one_protein, a): a[0] for a in s4_args}
         for future in as_completed(futures):
             result = future.result()
             completed += 1
@@ -301,6 +368,7 @@ def build_propensity_tables_from_data(proteins_data: dict,
             (seq, dssp, rama_codes, ka_codes,
              p_exp_aa, p_exp_dssp, p_exp_rama, p_exp_ka,
              p_win_aa, p_win_dssp, p_win_rama, p_win_ka) = result
+            # S4 proteins contribute to BOTH experimental and comparison
             comp_aa.extend(seq)
             if dssp is not None:
                 comp_dssp.extend(dssp)
@@ -315,8 +383,29 @@ def build_propensity_tables_from_data(proteins_data: dict,
             exp_dssp_windows.extend(p_win_dssp)
             exp_rama_windows.extend(p_win_rama)
             exp_ka_windows.extend(p_win_ka)
-            if completed % 50 == 0 or completed == total_pdb:
-                print(f"  Parsed {completed}/{total_pdb} proteins...", flush=True)
+            if completed % 50 == 0 or completed == total_s4:
+                print(f"  Parsed {completed}/{total_s4} S4 proteins...", flush=True)
+
+    # Parse S2-only proteins (comparison only)
+    print(f"  Parsing {total_s2_only} S2-only (comparison) PDB files with {n_workers} workers...",
+          flush=True)
+    completed = 0
+    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        futures = {executor.submit(_parse_one_protein_comp, a): a[0] for a in s2_only_args}
+        for future in as_completed(futures):
+            result = future.result()
+            completed += 1
+            if result is None:
+                continue
+            seq, dssp, rama_codes, ka_codes = result
+            comp_aa.extend(seq)
+            if dssp is not None:
+                comp_dssp.extend(dssp)
+            if rama_codes is not None:
+                comp_rama.extend(rama_codes)
+            comp_ka.extend(ka_codes)
+            if completed % 50 == 0 or completed == total_s2_only:
+                print(f"  Parsed {completed}/{total_s2_only} S2-only proteins...", flush=True)
 
     pt = PropensityTables(tables_dir)
 
@@ -425,7 +514,7 @@ def main():
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     # =========================================================
-    # Step 1: Parse Dataset T (training) and Dataset S3 (propensity)
+    # Step 1: Parse datasets
     # =========================================================
     print("=" * 60)
     print("STEP 1: Parsing datasets")
@@ -442,16 +531,21 @@ def main():
     print(f"Dataset T: {len(dataset_t)} proteins, "
           f"{n_viable} viable + {n_inviable} inviable = {n_viable + n_inviable} sites")
 
-    # Dataset S3 for propensity table construction
-    proteins_s3 = parse_dataset_s3(supp_dir)
-    total_s3 = len(proteins_s3)
-    total_sites_s3 = sum(len(v["sites"]) for v in proteins_s3.values())
-    print(f"Dataset S3: {total_s3} proteins with {total_sites_s3} CP sites (for propensity tables)")
+    # Dataset S4 (nrCPsitecpdb-40): 1087 CP sites — experimental group for propensity
+    proteins_s4 = parse_dataset_s4(supp_dir)
+    total_sites_s4 = sum(len(v["sites"]) for v in proteins_s4.values())
+    print(f"Dataset S4: {len(proteins_s4)} proteins with {total_sites_s4} CP sites (experimental group)")
+
+    # Dataset S2 (nrCPDB-40): 1059 proteins — comparison group for propensity
+    proteins_s2 = parse_dataset_s2(supp_dir)
+    print(f"Dataset S2: {len(proteins_s2)} proteins (comparison group, whole sequences)")
 
     if args.max_proteins:
-        pdb_ids = list(proteins_s3.keys())[:args.max_proteins]
-        proteins_s3 = {k: proteins_s3[k] for k in pdb_ids}
-        print(f"  Limited S3 to {len(proteins_s3)} proteins")
+        pdb_ids = list(proteins_s4.keys())[:args.max_proteins]
+        proteins_s4 = {k: proteins_s4[k] for k in pdb_ids}
+        # Also limit S2 to the same PDB IDs for fast testing
+        proteins_s2 = {k: v for k, v in proteins_s2.items() if k in proteins_s4}
+        print(f"  Limited to {len(proteins_s4)} S4 proteins (--max-proteins)")
 
     # =========================================================
     # Step 2: Download PDB files
@@ -461,8 +555,9 @@ def main():
         print("STEP 2: Downloading PDB structures")
         print("=" * 60)
 
-        # Download Dataset S3 PDBs (for propensity tables)
-        pdb_ids = list(proteins_s3.keys())
+        # Download all nrCPDB-40 PDBs (S4 experimental + S2 comparison)
+        all_propensity_pdbs = set(proteins_s4.keys()) | set(proteins_s2.keys())
+        pdb_ids = sorted(all_propensity_pdbs)
         downloaded = 0
         failed = 0
         for i, pdb_id in enumerate(pdb_ids):
@@ -474,7 +569,7 @@ def main():
             if (i + 1) % 50 == 0:
                 print(f"  Progress: {i+1}/{len(pdb_ids)} "
                       f"(downloaded: {downloaded}, failed: {failed})")
-        print(f"  S3 PDBs - Downloaded: {downloaded}, Failed: {failed}")
+        print(f"  S2+S4 PDBs - Downloaded: {downloaded}, Failed: {failed}")
 
         # Download Dataset T PDBs (for training)
         for pdb_id in dataset_t:
@@ -489,7 +584,7 @@ def main():
     # Step 3: Build propensity tables from Dataset S3
     # =========================================================
     print("\n" + "=" * 60)
-    print("STEP 3: Building propensity tables (from Dataset S3)")
+    print("STEP 3: Building propensity tables (S4 experimental vs S2 comparison)")
     print("=" * 60)
 
     use_gpu = not args.no_gpu
@@ -519,7 +614,8 @@ def main():
         tables.load()
     else:
         print(f"  Missing or incomplete tables: {missing}")
-        tables = build_propensity_tables_from_data(proteins_s3, pdb_dir, args.tables_dir,
+        tables = build_propensity_tables_from_data(proteins_s4, proteins_s2,
+                                                    pdb_dir, args.tables_dir,
                                                     use_gpu=use_gpu,
                                                     n_permutations=args.n_permutations)
 
