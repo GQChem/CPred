@@ -47,12 +47,11 @@ CAT_B_FEATURES = [
     "R_ka",  "2R_ka",  "RxR_ka",  "R2xR_ka",  "R3xR_ka",
 ]
 
-# Category C: 15 tertiary structural features (window-averaged)
-# Per Lo et al. 2012 Table S2 (included features, exclusion reason checked):
+# Category C: 13 tertiary structural features (window-averaged)
+# Per Lo et al. 2012 Table S2 (included features only):
 #   RSA+, DPX+, CM+, H-bonds+, Closeness, CN, WCN, GNM-F,
 #   DIS_b+, DIS_hpho, Fb+, Fhpho, RMSF+
-#   farness_union, farness_inter (Fb∪hpho+, Fb∩hpho+ — included in our model)
-# B-factor excluded per Table S2 (reason B: AUC < 0.65)
+# Excluded per Table S2: B-factor (B), FbORhpho/FbANDhpho (B: AUC<0.65)
 CAT_C_FEATURES = [
     "rsa",                    # RSA+ (relative solvent accessibility)
     "depth",                  # DPX+ (distance to surface)
@@ -67,14 +66,12 @@ CAT_C_FEATURES = [
     "dis_hpho",               # DIS_hpho (avg distance to hydrophobic residues)
     "farness_buried",         # Fb+ (farness from buried core)
     "farness_hydrophobic",    # Fhpho (farness from hydrophobic residues)
-    "farness_union",          # Fb∪hpho+ (farness from buried ∪ hydrophobic)
-    "farness_inter",          # Fb∩hpho+ (farness from buried ∩ hydrophobic)
 ]
 
 # Full canonical feature order
 FEATURE_NAMES = CAT_A_FEATURES + CAT_B_FEATURES + CAT_C_FEATURES
 
-NUM_FEATURES = len(FEATURE_NAMES)  # 49
+NUM_FEATURES = len(FEATURE_NAMES)  # 47
 
 # Feature groups for the HI model (matching Figure 4 categories)
 FEATURE_GROUPS = {
@@ -253,8 +250,7 @@ def extract_all_features(protein: ProteinStructure,
             cat_c[key] = tert_feats[key]
 
     # Contact network features
-    for key in ["closeness", "farness_buried", "farness_hydrophobic",
-                "farness_union", "farness_inter"]:
+    for key in ["closeness", "farness_buried", "farness_hydrophobic"]:
         if key in contact_feats:
             cat_c[key] = contact_feats[key]
 

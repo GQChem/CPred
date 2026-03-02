@@ -1,62 +1,69 @@
 """Feature standardization: inversion and Z-score normalization.
 
-Some features have inverted polarity (low value = more viable for CP).
-These are inverted before Z-score normalization so that higher values
-consistently indicate higher CP viability.
+Per Table S2 in Lo et al. 2012, each feature has an "Applied form":
+  M   = raw measure (positive correlation with viability)
+  -M  = negated (negative correlation inverted to positive)
+  1/M = reciprocal (packed/crowded measures inverted)
 
-Features to invert (per Table S2 in Lo et al. 2012):
-  - CN, WCN, closeness: packed environment → disfavored
-  - H-bonds: more H-bonds → disfavored (buried)
-  - Depth (DPX): deeper → disfavored
-  - DIS_b, DIS_hpho: average distance to buried/hydrophobic (lower → closer to core)
-
-Features NOT inverted (high = more viable):
-  - RSA: high solvent accessibility → favored
-  - CM: far from center → favored
-  - B-factor, GNM-F: high flexibility → favored
-  - Farness (Fb, Fhpho, F_union, F_inter): high farness from core → favored
+Applied forms per included feature:
+  RSA+      : M    (high accessibility → favored)
+  DPX+      : -M   (deep → disfavored, negate)
+  CM+       : M    (far from center → favored)
+  H-bonds+  : -M   (more H-bonds → buried → disfavored, negate)
+  Closeness : 1/M  (high closeness → packed → disfavored, reciprocal)
+  CN        : -M   (high CN → packed → disfavored, negate)
+  WCN       : 1/M  (high WCN → packed → disfavored, reciprocal)
+  GNM-F     : M    (high flexibility → favored)
+  Disb+     : M    (far from buried → favored)
+  Dishpho   : M    (far from hydrophobic → favored)
+  Fb+       : M    (high farness → favored)
+  Fhpho     : M    (high farness → favored)
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-# Features where low value correlates with CP viability (need inversion)
-# These are base names — window-expanded variants (e.g. closeness_m3) also match.
-_INVERT_BASE = {
-    "cn", "wcn", "closeness", "hbond",
-    "depth",
-    "dis_b", "dis_hpho",
-}
+# Features that need negation (-M form per Table S2)
+_NEGATE_FEATURES = {"cn", "hbond", "depth"}
 
-# Features that should NOT be inverted (high = more viable):
-# rsa, cm, gnm_msf, farness_buried, farness_hydrophobic,
-# farness_union, farness_inter
+# Features that need reciprocal (1/M form per Table S2)
+_RECIPROCAL_FEATURES = {"closeness", "wcn"}
+
+# All other Cat C features use M (raw, not inverted)
 
 
-def _should_invert(name: str) -> bool:
-    """Check if a feature name should be inverted."""
-    return name in _INVERT_BASE
+def _should_negate(name: str) -> bool:
+    return name in _NEGATE_FEATURES
 
 
-FEATURES_TO_INVERT = _INVERT_BASE
+def _should_reciprocal(name: str) -> bool:
+    return name in _RECIPROCAL_FEATURES
+
+
+FEATURES_TO_INVERT = _NEGATE_FEATURES | _RECIPROCAL_FEATURES
 
 
 def invert_features(features: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
-    """Invert features where low value = more viable.
+    """Apply feature transformations per Table S2.
 
-    Inversion: x_inv = -x (simple negation).
+    -M features: simple negation.
+    1/M features: reciprocal (with epsilon to avoid division by zero).
 
     Args:
         features: Dict of feature name -> (N,) arrays.
 
     Returns:
-        Dict with inverted features replaced.
+        Dict with transformed features.
     """
     result = {}
     for name, vals in features.items():
-        if _should_invert(name):
+        if _should_negate(name):
             result[name] = -vals
+        elif _should_reciprocal(name):
+            # Reciprocal with small epsilon to avoid division by zero
+            safe_vals = np.where(np.abs(vals) < 1e-10, 1e-10, vals)
+            result[name] = 1.0 / safe_vals
         else:
             result[name] = vals.copy()
     return result
