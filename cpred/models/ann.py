@@ -57,7 +57,7 @@ class CPredANN:
 
     def __init__(self, n_features: int = 46, lr: float = 0.5,
                  momentum: float = 0.1, n_iterations: int = 5000,
-                 n_restarts: int = 5):
+                 n_restarts: int = 20):
         self.n_features = n_features
         self.lr = lr
         self.momentum = momentum

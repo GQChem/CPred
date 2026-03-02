@@ -1,11 +1,7 @@
-"""Ensemble model: average of ANN, SVM, RF predictions (+ optional HI),
+"""Ensemble model: average of ANN, SVM, RF, and HI predictions,
 followed by 3-residue weighted window smoothing (Lo et al. 2012, Formula 9).
 
-The HI model is trained and reported individually but excluded from the
-ensemble average because our tree approximation is too coarse to be helpful.
-The three ML models (RF + SVM + ANN) match the paper's combined performance.
-
-Final probability = smooth((P_ann + P_svm + P_rf) / 3)
+Final probability = smooth((P_ann + P_svm + P_rf + P_hi) / 4)
 """
 
 from __future__ import annotations
@@ -77,7 +73,7 @@ class CPredEnsemble:
         print("Ensemble training complete.")
 
     def predict(self, X: np.ndarray) -> np.ndarray:
-        """Predict CP viability with smoothing (RF + SVM + ANN only).
+        """Predict CP viability with smoothing (RF + SVM + ANN + HI).
 
         Returns:
             (N,) probability scores in [0, 1].
@@ -85,7 +81,8 @@ class CPredEnsemble:
         p_rf = self.rf.predict(X)
         p_svm = self.svm.predict(X)
         p_ann = self.ann.predict(X)
-        avg = (p_rf + p_svm + p_ann) / 3.0
+        p_hi = self.hi.predict(X)
+        avg = (p_rf + p_svm + p_ann + p_hi) / 4.0
         return smooth_predictions(avg)
 
     def predict_unsmoothed(self, X: np.ndarray) -> np.ndarray:
@@ -93,7 +90,8 @@ class CPredEnsemble:
         p_rf = self.rf.predict(X)
         p_svm = self.svm.predict(X)
         p_ann = self.ann.predict(X)
-        return (p_rf + p_svm + p_ann) / 3.0
+        p_hi = self.hi.predict(X)
+        return (p_rf + p_svm + p_ann + p_hi) / 4.0
 
     def predict_individual(self, X: np.ndarray) -> dict[str, np.ndarray]:
         """Predict from each model individually."""

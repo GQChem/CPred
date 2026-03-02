@@ -277,8 +277,8 @@ class CPredHierarchical:
 
         probs = np.zeros(len(if_scores))
         for i, if_val in enumerate(if_scores):
-            n_p = np.sum(self._train_if_pos >= if_val)
-            n_n = np.sum(self._train_if_neg <= if_val)
+            n_p = np.sum(self._train_if_pos <= if_val)
+            n_n = np.sum(self._train_if_neg >= if_val)
             denom = n_p + n_n
             probs[i] = n_p / denom if denom > 0 else 0.5
 

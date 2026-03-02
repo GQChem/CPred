@@ -681,8 +681,9 @@ def main():
     # Feature sanity check: viable vs inviable mean per category
     pos_mask = y_train == 1
     neg_mask = y_train == 0
-    cat_a_end = len([f for f in FEATURE_NAMES if f.startswith(("R_", "2R_", "RxR", "R2x", "R3x", "3R_", "4R_", "5R_"))])
-    cat_b_end = cat_a_end + len([f for f in FEATURE_NAMES if f.endswith(("_sse", "_rm", "_ka"))])
+    from cpred.pipeline import CAT_A_FEATURES, CAT_B_FEATURES
+    cat_a_end = len(CAT_A_FEATURES)
+    cat_b_end = cat_a_end + len(CAT_B_FEATURES)
     print(f"\n  Feature means (viable vs inviable):")
     print(f"    Cat A (seq propensity):  viable={X_train[pos_mask, :cat_a_end].mean():.4f}  "
           f"inviable={X_train[neg_mask, :cat_a_end].mean():.4f}")
