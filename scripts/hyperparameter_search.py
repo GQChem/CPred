@@ -21,10 +21,16 @@ import time
 import warnings
 from pathlib import Path
 
+import builtins
+import functools
+
 import numpy as np
 import pandas as pd
 
 warnings.filterwarnings("ignore")
+
+# Force flush on every print (avoids buffering when output is redirected)
+print = functools.partial(builtins.print, flush=True)
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from cpred.io.pdb_parser import parse_pdb
