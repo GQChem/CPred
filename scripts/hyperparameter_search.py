@@ -387,8 +387,9 @@ def search_rf(X_train, y_train, X_dhfr_full, labeled_indices, y_dhfr,
 # Ensemble evaluation
 # =====================================================================
 def evaluate_ensemble(X_train, y_train, X_dhfr_full, labeled_indices, y_dhfr,
-                      best_ann_params, best_svm_params, best_rf_params):
-    """Train best models and evaluate ensemble on DHFR."""
+                      best_ann_params, best_svm_params, best_rf_params,
+                      output_dir: Path = Path("results/best_models")):
+    """Train best models, evaluate ensemble on DHFR, and save model weights."""
     print(f"\n{'='*60}")
     print(f"ENSEMBLE EVALUATION (best of each model)")
     print(f"{'='*60}")
@@ -499,6 +500,15 @@ def evaluate_ensemble(X_train, y_train, X_dhfr_full, labeled_indices, y_dhfr,
     print(f"\n  Paper reference (DHFR):")
     print(f"    AUC=0.906  Sens=0.709  Spec=0.918  MCC=0.633")
 
+    # Save best model weights so they can be loaded directly without retraining
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    ann.save(output_dir / "ann.pt")
+    svm.save(output_dir / "svm.pkl")
+    rf.save(output_dir / "rf.pkl")
+    hi.save(output_dir / "hi.json")
+    print(f"\n  Models saved to {output_dir}/")
+
     return {
         "ensemble_equal": m_ens,
         "best_weights": list(best_weights),
@@ -562,7 +572,8 @@ def main():
 
         ens_results = evaluate_ensemble(
             X_train, y_train, X_dhfr_full, labeled_indices, y_dhfr,
-            best_ann, best_svm, best_rf)
+            best_ann, best_svm, best_rf,
+            output_dir=args.output.parent / "best_models")
         all_results["ensemble"] = ens_results
 
     # Save results
