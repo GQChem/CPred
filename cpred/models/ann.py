@@ -30,12 +30,12 @@ except (ImportError, OSError):
 if HAS_TORCH:
 
     class CPredANNModule(nn.Module):
-        """PyTorch ANN module: F -> round(sqrt(F)) -> 1 with sigmoid activations."""
+        """PyTorch ANN module: F -> hidden -> 1 with sigmoid activations."""
 
-        def __init__(self, n_features: int = 46):
+        def __init__(self, n_features: int = 46, hidden_size: int | None = None):
             super().__init__()
-            # Hidden neurons: Round(sqrt(N_input * N_output)) = Round(sqrt(n_features * 1))
-            hidden = max(round(math.sqrt(n_features * 1)), 2)
+            # Hidden neurons: override or Round(sqrt(N_input * N_output))
+            hidden = hidden_size if hidden_size is not None else max(round(math.sqrt(n_features * 1)), 2)
             self.net = nn.Sequential(
                 nn.Linear(n_features, hidden),
                 nn.Sigmoid(),
@@ -57,12 +57,13 @@ class CPredANN:
 
     def __init__(self, n_features: int = 46, lr: float = 0.5,
                  momentum: float = 0.1, n_iterations: int = 5000,
-                 n_restarts: int = 10):
+                 n_restarts: int = 10, hidden_size: int | None = None):
         self.n_features = n_features
         self.lr = lr
         self.momentum = momentum
         self.n_iterations = n_iterations
         self.n_restarts = n_restarts
+        self.hidden_size = hidden_size
         self._fitted = False
         self._use_torch = HAS_TORCH
         self._model = None
@@ -71,13 +72,13 @@ class CPredANN:
         if HAS_TORCH:
             self.device = torch.device(
                 "cuda" if torch.cuda.is_available() else "cpu")
-            self._model = CPredANNModule(n_features).to(self.device)
+            self._model = CPredANNModule(n_features, hidden_size=hidden_size).to(self.device)
 
     def _train_one(self, X_t: 'torch.Tensor', y_t: 'torch.Tensor',
                    seed: int) -> tuple['CPredANNModule', float]:
         """Train a single ANN with given seed. Returns (model, final_loss)."""
         torch.manual_seed(seed)
-        model = CPredANNModule(self.n_features).to(self.device)
+        model = CPredANNModule(self.n_features, hidden_size=self.hidden_size).to(self.device)
         optimizer = torch.optim.SGD(
             model.parameters(), lr=self.lr, momentum=self.momentum)
 
