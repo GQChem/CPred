@@ -148,10 +148,10 @@ def search_ann(X_train, y_train, X_dhfr_full, labeled_indices, y_dhfr,
         n_restarts = 30
     else:
         grid = {
-            "lr": [0.01, 0.05, 0.1, 0.5, 1.0],
-            "momentum": [0.0, 0.1, 0.3, 0.5, 0.9],
-            "n_iterations": [5000, 10000, 20000, 50000],
-            "hidden_size": [sqrt_nf, 2 * sqrt_nf, n_features // 2, n_features],
+            "lr": [0.05, 0.1, 0.2, 0.3],           # quick run: 0.1 won; drop 0.01, 0.5, 1.0
+            "momentum": [0.0, 0.1, 0.2, 0.3, 0.5],  # add 0.2; drop 0.9
+            "n_iterations": [10000, 20000, 50000],   # drop 5000 (clearly worse)
+            "hidden_size": [10, 14, 20, 28],          # anchor around 14; drop n_features (49)
         }
         n_restarts = 50
 
@@ -191,14 +191,12 @@ def search_ann(X_train, y_train, X_dhfr_full, labeled_indices, y_dhfr,
         if metrics["auc"] > best_auc:
             best_auc = metrics["auc"]
             best_config = entry
-            print(f"  [{i+1:3d}/{total}] NEW BEST AUC={metrics['auc']:.4f} "
-                  f"MCC={metrics['mcc']:.3f} Spec={metrics['specificity']:.3f} "
-                  f"| lr={params['lr']} mom={params['momentum']} "
-                  f"iter={params['n_iterations']} hidden={params['hidden_size']} "
-                  f"({elapsed:.1f}s)")
-        elif (i + 1) % 20 == 0:
-            print(f"  [{i+1:3d}/{total}] AUC={metrics['auc']:.4f} "
-                  f"(best={best_auc:.4f}) ({elapsed:.1f}s)")
+        print(f"  [{i+1:3d}/{total}] AUC={metrics['auc']:.4f} "
+              f"MCC={metrics['mcc']:.3f} Spec={metrics['specificity']:.3f} "
+              f"| lr={params['lr']} mom={params['momentum']} "
+              f"iter={params['n_iterations']} hidden={params['hidden_size']} "
+              f"({'NEW BEST ' if metrics['auc'] == best_auc else ''}best={best_auc:.4f}) "
+              f"({elapsed:.1f}s)")
 
     # Sort by AUC descending
     results.sort(key=lambda r: r["auc"], reverse=True)
@@ -263,12 +261,11 @@ def search_svm(X_train, y_train, X_dhfr_full, labeled_indices, y_dhfr,
         if metrics["auc"] > best_auc:
             best_auc = metrics["auc"]
             best_config = entry
-            print(f"  [{i+1:3d}/{total}] NEW BEST AUC={metrics['auc']:.4f} "
-                  f"MCC={metrics['mcc']:.3f} Spec={metrics['specificity']:.3f} "
-                  f"| C={params['C']} gamma={params['gamma']} ({elapsed:.1f}s)")
-        elif (i + 1) % 10 == 0:
-            print(f"  [{i+1:3d}/{total}] AUC={metrics['auc']:.4f} "
-                  f"(best={best_auc:.4f}) ({elapsed:.1f}s)")
+        print(f"  [{i+1:3d}/{total}] AUC={metrics['auc']:.4f} "
+              f"MCC={metrics['mcc']:.3f} Spec={metrics['specificity']:.3f} "
+              f"| C={params['C']} gamma={params['gamma']} "
+              f"({'NEW BEST ' if metrics['auc'] == best_auc else ''}best={best_auc:.4f}) "
+              f"({elapsed:.1f}s)")
 
     results.sort(key=lambda r: r["auc"], reverse=True)
     print(f"\n  SVM Best: AUC={best_config['auc']:.4f} "
@@ -369,12 +366,11 @@ def search_rf(X_train, y_train, X_dhfr_full, labeled_indices, y_dhfr,
         if metrics["auc"] > best_auc:
             best_auc = metrics["auc"]
             best_config = entry
-            print(f"  [{i+1:3d}/{total}] NEW BEST AUC={metrics['auc']:.4f} "
-                  f"MCC={metrics['mcc']:.3f} Spec={metrics['specificity']:.3f} "
-                  f"| grow={n_grow} keep={n_keep} mf={mf_frac} ({elapsed:.1f}s)")
-        else:
-            print(f"  [{i+1:3d}/{total}] AUC={metrics['auc']:.4f} "
-                  f"(best={best_auc:.4f}) ({elapsed:.1f}s)")
+        print(f"  [{i+1:3d}/{total}] AUC={metrics['auc']:.4f} "
+              f"MCC={metrics['mcc']:.3f} Spec={metrics['specificity']:.3f} "
+              f"| grow={n_grow} keep={n_keep} mf={mf_frac} "
+              f"({'NEW BEST ' if metrics['auc'] == best_auc else ''}best={best_auc:.4f}) "
+              f"({elapsed:.1f}s)")
 
     results.sort(key=lambda r: r["auc"], reverse=True)
     print(f"\n  RF Best: AUC={best_config['auc']:.4f} "
