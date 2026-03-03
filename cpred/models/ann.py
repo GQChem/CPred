@@ -83,11 +83,13 @@ class CPredANN:
             model.parameters(), lr=self.lr, momentum=self.momentum)
 
         n_samples = len(y_t)
-        rng = np.random.RandomState(seed)
+
+        # Pre-sample all indices at once to avoid Python-level per-step overhead
+        indices = torch.randint(0, n_samples, (self.n_iterations,),
+                                generator=torch.Generator().manual_seed(seed))
 
         model.train()
-        for _ in range(self.n_iterations):
-            idx = rng.randint(0, n_samples)
+        for idx in indices:
             optimizer.zero_grad()
             pred = model(X_t[idx:idx+1])
             loss = nn.functional.binary_cross_entropy(pred, y_t[idx:idx+1])
