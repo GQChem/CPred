@@ -24,13 +24,14 @@ warnings.filterwarnings("ignore")
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from cpred.io.pdb_parser import parse_pdb
-from cpred.pipeline import FEATURE_NAMES
+from cpred.pipeline import FEATURE_NAMES, get_feature_names
 from cpred.models.ensemble import CPredEnsemble
 from cpred.training.evaluate import compute_metrics
 
 # Reuse helpers from the training script
 from prepare_and_train import (
-    parse_dataset_s3,
+    parse_dataset_s4,
+    parse_dataset_s2,
     parse_dataset_t,
     download_pdb,
     build_propensity_tables_from_data,
@@ -40,8 +41,10 @@ from prepare_and_train import (
 from cpred.propensity.tables import PropensityTables
 
 
-def run_cv(X: np.ndarray, y: np.ndarray, n_folds: int = 10) -> None:
+def run_cv(X: np.ndarray, y: np.ndarray, n_folds: int = 10,
+           feature_names: list[str] | None = None) -> None:
     """Run 10-fold stratified CV on the full ensemble and individual models."""
+    feat_names = feature_names if feature_names is not None else FEATURE_NAMES
     skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
 
     ensemble_metrics = []
@@ -55,8 +58,8 @@ def run_cv(X: np.ndarray, y: np.ndarray, n_folds: int = 10) -> None:
               f"(train: {len(train_idx)}, test: {len(test_idx)}, "
               f"test_pos: {int(y_test.sum())}) ---")
 
-        ensemble = CPredEnsemble(feature_names=FEATURE_NAMES)
-        ensemble.fit(X_train, y_train, feature_names=FEATURE_NAMES)
+        ensemble = CPredEnsemble(feature_names=feat_names)
+        ensemble.fit(X_train, y_train, feature_names=feat_names)
 
         # Ensemble prediction (unsmoothed for CV since samples aren't sequential)
         probs = ensemble.predict_unsmoothed(X_test)
@@ -111,7 +114,11 @@ def main():
     parser.add_argument("--skip-download", action="store_true")
     parser.add_argument("--rmsf-dir", type=Path, default=Path("data/rmsf"),
                         help="Directory with per-protein RMSF CSVs from CABSflex")
+    parser.add_argument("--include-rmsf", action="store_true",
+                        help="Include RMSF as a feature (47 features instead of 46)")
     args = parser.parse_args()
+
+    feature_names = get_feature_names(include_rmsf=args.include_rmsf)
 
     supp_dir = args.data_dir / "supplementary"
     pdb_dir = args.data_dir / "pdb"
@@ -132,27 +139,30 @@ def main():
     print(f"Dataset T: {len(dataset_t)} proteins, "
           f"{n_viable} viable + {n_inviable} inviable = {n_viable + n_inviable} sites")
 
-    # Dataset S3 for propensity tables
-    proteins_s3 = parse_dataset_s3(supp_dir)
-    print(f"Dataset S3: {len(proteins_s3)} proteins (for propensity tables)")
+    # Dataset S4 + S2 for propensity tables
+    proteins_s4 = parse_dataset_s4(supp_dir)
+    proteins_s2 = parse_dataset_s2(supp_dir)
+    total_sites_s4 = sum(len(v["sites"]) for v in proteins_s4.values())
+    print(f"Dataset S4: {len(proteins_s4)} proteins, {total_sites_s4} CP sites (experimental)")
+    print(f"Dataset S2: {len(proteins_s2)} proteins (comparison)")
 
     # === Step 2: Download PDBs ===
     if not args.skip_download:
         print("\n" + "=" * 60)
         print("STEP 2: Downloading PDB structures")
         print("=" * 60)
-        pdb_ids = list(proteins_s3.keys())
+        all_pdb_ids = sorted(set(proteins_s4.keys()) | set(proteins_s2.keys()))
         downloaded, failed = 0, 0
-        for i, pdb_id in enumerate(pdb_ids):
+        for i, pdb_id in enumerate(all_pdb_ids):
             path = download_pdb(pdb_id, pdb_dir)
             if path:
                 downloaded += 1
             else:
                 failed += 1
             if (i + 1) % 50 == 0:
-                print(f"  Progress: {i+1}/{len(pdb_ids)} "
+                print(f"  Progress: {i+1}/{len(all_pdb_ids)} "
                       f"(downloaded: {downloaded}, failed: {failed})")
-        print(f"  S3: Downloaded: {downloaded}, Failed: {failed}")
+        print(f"  S4+S2: Downloaded: {downloaded}, Failed: {failed}")
 
         for pdb_id in dataset_t:
             download_pdb(pdb_id, pdb_dir)
@@ -166,6 +176,8 @@ def main():
 
     use_gpu = not args.no_gpu
     required_tables = ["single_aa", "di_residue", "oligo_residue",
+                       "single_aac3", "di_aac3", "oligo_aac3",
+                       "single_aac5", "di_aac5", "oligo_aac5",
                        "dssp", "di_dssp", "ramachandran", "di_ramachandran",
                        "kappa_alpha", "di_kappa_alpha"]
 
@@ -191,8 +203,8 @@ def main():
     else:
         print(f"  Missing or incomplete tables: {missing}")
         tables = build_propensity_tables_from_data(
-            proteins_s3, pdb_dir, args.tables_dir, use_gpu=use_gpu,
-            n_permutations=args.n_permutations)
+            proteins_s4, proteins_s2, pdb_dir, args.tables_dir,
+            use_gpu=use_gpu, n_permutations=args.n_permutations)
 
     # === Step 4: Extract features for Dataset T ===
     print("\n" + "=" * 60)
@@ -202,7 +214,8 @@ def main():
     pdb_ids = list(dataset_t.keys())
     rmsf_dir = str(args.rmsf_dir) if args.rmsf_dir else None
     worker_args = [
-        (pdb_id, dataset_t[pdb_id], str(pdb_dir / f"{pdb_id}.pdb"), tables, rmsf_dir)
+        (pdb_id, dataset_t[pdb_id], str(pdb_dir / f"{pdb_id}.pdb"), tables,
+         rmsf_dir, args.include_rmsf, feature_names)
         for pdb_id in pdb_ids
     ]
 
@@ -239,7 +252,7 @@ def main():
     print(f"STEP 5: {args.n_folds}-fold Cross-Validation")
     print("=" * 60)
 
-    run_cv(X_all, y_all, n_folds=args.n_folds)
+    run_cv(X_all, y_all, n_folds=args.n_folds, feature_names=feature_names)
 
     # === Step 6: Independent test on DHFR ===
     print("\n" + "=" * 60)
@@ -253,11 +266,13 @@ def main():
         try:
             # Train ensemble on full Dataset T
             print("  Training ensemble on full Dataset T...")
-            ensemble = CPredEnsemble(feature_names=FEATURE_NAMES)
-            ensemble.fit(X_all, y_all, feature_names=FEATURE_NAMES)
+            ensemble = CPredEnsemble(feature_names=feature_names)
+            ensemble.fit(X_all, y_all, feature_names=feature_names)
 
             dhfr = parse_pdb(dhfr_path, chain_id="A")
-            X_dhfr = extract_features_for_protein(dhfr, tables, rmsf_dir=str(args.rmsf_dir))
+            X_dhfr = extract_features_for_protein(
+                dhfr, tables, rmsf_dir=str(args.rmsf_dir),
+                include_rmsf=args.include_rmsf, feature_names=feature_names)
 
             if X_dhfr is not None:
                 dhfr_df = pd.read_csv(dhfr_csv)

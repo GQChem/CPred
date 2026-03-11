@@ -132,7 +132,7 @@ _CAT_C_SUBGROUPS = {
         "weight": 0.19,
     },
     "Flex": {
-        "features": {"rmsf": 0.50, "gnm_msf": 0.50},
+        "features": {"gnm_msf": 1.00},
         "weight": 0.01,
     },
 }
@@ -163,6 +163,12 @@ class CPredHierarchical:
         self._fitted = False
         self._train_if_pos = None  # IF values for positive training samples
         self._train_if_neg = None  # IF values for negative training samples
+
+        # Instance-level Flex features: adjust when RMSF is present
+        if "rmsf" in self.feature_names:
+            self._flex_features = {"rmsf": 0.50, "gnm_msf": 0.50}
+        else:
+            self._flex_features = {"gnm_msf": 1.00}
 
     def _feature_index(self, name: str) -> int | None:
         try:
@@ -222,7 +228,8 @@ class CPredHierarchical:
         eccent = self._compute_subgroup_score(X, _CAT_C_SUBGROUPS["Eccent"])
         nhbonds = self._compute_subgroup_score(X, _CAT_C_SUBGROUPS["Nhbonds"])
         uncrowd = self._compute_subgroup_score(X, _CAT_C_SUBGROUPS["Uncrowd"])
-        flex = self._compute_subgroup_score(X, _CAT_C_SUBGROUPS["Flex"])
+        flex = self._compute_subgroup_score(
+            X, {"features": self._flex_features, "weight": 0.01})
 
         # Combine with weights
         w_solacc = _CAT_C_SUBGROUPS["Solacc"]["weight"]
@@ -257,6 +264,11 @@ class CPredHierarchical:
         """
         if feature_names is not None:
             self.feature_names = feature_names
+            # Re-evaluate Flex features based on updated feature names
+            if "rmsf" in self.feature_names:
+                self._flex_features = {"rmsf": 0.50, "gnm_msf": 0.50}
+            else:
+                self._flex_features = {"gnm_msf": 1.00}
 
         if_scores = self.compute_if_score(X)
         self._train_if_pos = np.sort(if_scores[y == 1])
@@ -277,8 +289,8 @@ class CPredHierarchical:
 
         probs = np.zeros(len(if_scores))
         for i, if_val in enumerate(if_scores):
-            n_p = np.sum(self._train_if_pos <= if_val)
-            n_n = np.sum(self._train_if_neg >= if_val)
+            n_p = np.sum(self._train_if_pos >= if_val)
+            n_n = np.sum(self._train_if_neg <= if_val)
             denom = n_p + n_n
             probs[i] = n_p / denom if denom > 0 else 0.5
 

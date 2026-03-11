@@ -5,9 +5,11 @@ Orchestrates: PDB parsing -> feature extraction -> standardization -> prediction
 The features are organized into three categories (per Lo et al. 2012):
   Category A (sequence propensity): 19 coupled-residue propensity features
   Category B (SS propensity):       15 coupled-SS propensity features
-  Category C (tertiary structure):  15 window-averaged structural features
+  Category C (tertiary structure):  12 window-averaged structural features (default)
+                                    13 if RMSF is included
 
-Total: 19 + 15 + 15 = 49 features
+Default total: 19 + 15 + 12 = 46 features (matching paper Table S1)
+With RMSF:     19 + 15 + 13 = 47 features
 """
 
 from __future__ import annotations
@@ -47,10 +49,11 @@ CAT_B_FEATURES = [
     "R_ka",  "2R_ka",  "RxR_ka",  "R2xR_ka",  "R3xR_ka",
 ]
 
-# Category C: 13 tertiary structural features (window-averaged)
-# Per Lo et al. 2012 Table S2 (included features only):
+# Category C: 12 tertiary structural features (window-averaged, default)
+# Per Lo et al. 2012 Table S1 (46 features):
 #   RSA+, DPX+, CM+, H-bonds+, Closeness, CN, WCN, GNM-F,
-#   DIS_b+, DIS_hpho, Fb+, Fhpho, RMSF+
+#   DIS_b+, DIS_hpho, Fb+, Fhpho
+# RMSF is NOT in the paper's Table S1 — only GNM-F for flexibility.
 # Excluded per Table S2: B-factor (B), FbORhpho/FbANDhpho (B: AUC<0.65)
 CAT_C_FEATURES = [
     "rsa",                    # RSA+ (relative solvent accessibility)
@@ -60,7 +63,6 @@ CAT_C_FEATURES = [
     "closeness",              # Closeness centrality
     "cn",                     # CN (contact number)
     "wcn",                    # WCN (weighted contact number)
-    "rmsf",                   # RMSF+ (from CABSflex coarse-grained MD)
     "gnm_msf",                # GNM-F (Gaussian Network Model fluctuation)
     "dis_b",                  # DIS_b+ (avg distance to buried residues)
     "dis_hpho",               # DIS_hpho (avg distance to hydrophobic residues)
@@ -68,26 +70,30 @@ CAT_C_FEATURES = [
     "farness_hydrophobic",    # Fhpho (farness from hydrophobic residues)
 ]
 
-# Full canonical feature order
+# Full canonical feature order (46 features, no RMSF — matches paper Table S1)
 FEATURE_NAMES = CAT_A_FEATURES + CAT_B_FEATURES + CAT_C_FEATURES
 
-NUM_FEATURES = len(FEATURE_NAMES)  # 47
+NUM_FEATURES = len(FEATURE_NAMES)  # 46
 
-# Feature groups for the HI model (matching Figure 4 categories)
-FEATURE_GROUPS = {
-    "seq_propensity": CAT_A_FEATURES,   # 1dprop, weight 0.14
-    "ss_propensity": CAT_B_FEATURES,    # 2dprop, weight 0.57
-    # 3dprop sub-groups (weight 0.29):
-    "solacc": ["rsa"],                  # Solacc
-    "eccent": ["cm", "depth"],          # Eccent
-    "awaycore": ["farness_buried", "dis_b"],              # Awaybury
-    "awayhpho": ["farness_hydrophobic", "dis_hpho"],      # Awayhpho
-    "hbonds": ["hbond"],                # Nhbonds
-    "uncrowd": ["wcn", "cn", "closeness"],  # Uncrowd
-    "dynamics": ["gnm_msf", "rmsf"],                       # Flex
-    # Extra Cat C not in the 46 but we keep them
-    "extra": ["farness_union", "farness_inter"],
-}
+
+def get_feature_names(include_rmsf: bool = False) -> list[str]:
+    """Return the canonical feature name list.
+
+    Args:
+        include_rmsf: If True, include RMSF as a 47th feature (after gnm_msf).
+
+    Returns:
+        List of 46 (default) or 47 feature names.
+    """
+    if not include_rmsf:
+        return list(FEATURE_NAMES)
+    # Insert rmsf after gnm_msf in Cat C
+    names = list(CAT_A_FEATURES + CAT_B_FEATURES)
+    for f in CAT_C_FEATURES:
+        names.append(f)
+        if f == "gnm_msf":
+            names.append("rmsf")
+    return names
 
 
 def _parse_rmsf_csv(csv_path: Path, chain_id: str = "A") -> dict[int, float]:
@@ -214,7 +220,8 @@ def load_rmsf(pdb_id: str, residue_numbers: list[int],
 def extract_all_features(protein: ProteinStructure,
                          tables: PropensityTables,
                          rmsf_dir: Path | str | None = None,
-                         rmsf_file: Path | str | None = None) -> dict[str, np.ndarray]:
+                         rmsf_file: Path | str | None = None,
+                         include_rmsf: bool = False) -> dict[str, np.ndarray]:
     """Extract all features for a protein structure.
 
     Args:
@@ -223,6 +230,8 @@ def extract_all_features(protein: ProteinStructure,
         rmsf_dir: Directory containing per-protein RMSF CSV files from
             CABSflex.  Ignored if *rmsf_file* is given.
         rmsf_file: Path to a single RMSF CSV file for this protein.
+        include_rmsf: If True, include RMSF as a feature. Default False
+            (paper uses only GNM-F for flexibility).
 
     Returns:
         Dictionary mapping feature name to (N,) arrays.
@@ -254,13 +263,14 @@ def extract_all_features(protein: ProteinStructure,
         if key in contact_feats:
             cat_c[key] = contact_feats[key]
 
-    # RMSF from CABSflex
-    if rmsf_file is not None:
-        cat_c["rmsf"] = load_rmsf_file(rmsf_file, protein.residue_numbers,
-                                        protein.chain_id)
-    else:
-        cat_c["rmsf"] = load_rmsf(protein.pdb_id, protein.residue_numbers,
-                                   rmsf_dir, protein.chain_id)
+    # RMSF from CABSflex (only if requested)
+    if include_rmsf:
+        if rmsf_file is not None:
+            cat_c["rmsf"] = load_rmsf_file(rmsf_file, protein.residue_numbers,
+                                            protein.chain_id)
+        else:
+            cat_c["rmsf"] = load_rmsf(protein.pdb_id, protein.residue_numbers,
+                                       rmsf_dir, protein.chain_id)
 
     # GNM fluctuation
     cat_c["gnm_msf"] = gnm_msf
@@ -272,18 +282,22 @@ def extract_all_features(protein: ProteinStructure,
     return features
 
 
-def build_feature_matrix(features: dict[str, np.ndarray]) -> np.ndarray:
+def build_feature_matrix(features: dict[str, np.ndarray],
+                         feature_names: list[str] | None = None) -> np.ndarray:
     """Assemble feature dictionary into a matrix.
 
     Args:
         features: Dictionary of feature name -> (N,) arrays.
+        feature_names: Ordered list of feature names to include. If None,
+            uses the default FEATURE_NAMES (46 features, no RMSF).
 
     Returns:
         (N, num_features) feature matrix.
     """
+    names = feature_names if feature_names is not None else FEATURE_NAMES
     ordered = []
     n = next(len(v) for v in features.values())
-    for name in FEATURE_NAMES:
+    for name in names:
         if name in features:
             ordered.append(features[name])
         else:
@@ -295,7 +309,8 @@ def predict_from_pdb(pdb_path: str | Path, chain_id: str = "A",
                      tables: PropensityTables | None = None,
                      model=None,
                      threshold: float = 0.5,
-                     rmsf_file: str | Path | None = None) -> dict:
+                     rmsf_file: str | Path | None = None,
+                     include_rmsf: bool = False) -> dict:
     """Full prediction pipeline from PDB file.
 
     Args:
@@ -318,13 +333,15 @@ def predict_from_pdb(pdb_path: str | Path, chain_id: str = "A",
         tables.load()
 
     # Extract features
-    features = extract_all_features(protein, tables, rmsf_file=rmsf_file)
+    features = extract_all_features(protein, tables, rmsf_file=rmsf_file,
+                                     include_rmsf=include_rmsf)
 
     # Standardize
     features = standardize_features(features)
 
     # Build feature matrix
-    X = build_feature_matrix(features)
+    feat_names = get_feature_names(include_rmsf=include_rmsf)
+    X = build_feature_matrix(features, feature_names=feat_names)
 
     # Predict
     if model is not None:
@@ -342,5 +359,5 @@ def predict_from_pdb(pdb_path: str | Path, chain_id: str = "A",
         "probabilities": probabilities,
         "viable": viable,
         "features": X,
-        "feature_names": FEATURE_NAMES,
+        "feature_names": feat_names,
     }

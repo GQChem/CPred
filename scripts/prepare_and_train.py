@@ -33,9 +33,10 @@ from cpred.features.structural_codes import assign_ramachandran_codes, assign_ka
 from cpred.features.standardization import standardize_features
 from cpred.propensity.tables import PropensityTables
 from cpred.propensity.scoring import build_propensity_table
-from cpred.pipeline import FEATURE_NAMES, build_feature_matrix, extract_all_features
+from cpred.pipeline import FEATURE_NAMES, build_feature_matrix, extract_all_features, get_feature_names
 from cpred.models.ensemble import CPredEnsemble
 from cpred.training.evaluate import compute_metrics, cross_validate
+from cpred.features.aa_alphabets import convert_list_aac3, convert_list_aac5
 
 
 def download_pdb(pdb_id: str, pdb_dir: Path, timeout: int = 30) -> Path | None:
@@ -112,6 +113,8 @@ def _extract_features_worker(args):
     """Worker: parse PDB, extract features, return (X, y) or (None, reason)."""
     pdb_id, info, pdb_path_str, tables = args[:4]
     rmsf_dir = args[4] if len(args) > 4 else None
+    include_rmsf = args[5] if len(args) > 5 else False
+    feat_names = args[6] if len(args) > 6 else None
     pdb_path = Path(pdb_path_str)
     if not pdb_path.exists():
         return None, f"{pdb_id}: PDB file not found"
@@ -120,7 +123,9 @@ def _extract_features_worker(args):
     except Exception as e:
         return None, f"{pdb_id}: parse error: {e}"
 
-    X = extract_features_for_protein(protein, tables, rmsf_dir=rmsf_dir)
+    X = extract_features_for_protein(protein, tables, rmsf_dir=rmsf_dir,
+                                      include_rmsf=include_rmsf,
+                                      feature_names=feat_names)
     if X is None:
         return None, f"{pdb_id}: feature extraction failed"
 
@@ -142,6 +147,8 @@ def _extract_features_dataset_t_worker(args):
     """
     pdb_id, info, pdb_path_str, tables = args[:4]
     rmsf_dir = args[4] if len(args) > 4 else None
+    include_rmsf = args[5] if len(args) > 5 else False
+    feat_names = args[6] if len(args) > 6 else None
     pdb_path = Path(pdb_path_str)
     if not pdb_path.exists():
         return None, f"{pdb_id}: PDB file not found"
@@ -150,7 +157,9 @@ def _extract_features_dataset_t_worker(args):
     except Exception as e:
         return None, f"{pdb_id}: parse error: {e}"
 
-    X = extract_features_for_protein(protein, tables, rmsf_dir=rmsf_dir)
+    X = extract_features_for_protein(protein, tables, rmsf_dir=rmsf_dir,
+                                      include_rmsf=include_rmsf,
+                                      feature_names=feat_names)
     if X is None:
         return None, f"{pdb_id}: feature extraction failed"
 
@@ -180,12 +189,15 @@ def _extract_features_dataset_t_worker(args):
 
 def extract_features_for_protein(protein: ProteinStructure,
                                   tables: PropensityTables,
-                                  rmsf_dir=None) -> np.ndarray | None:
+                                  rmsf_dir=None,
+                                  include_rmsf: bool = False,
+                                  feature_names: list[str] | None = None) -> np.ndarray | None:
     """Extract and standardize all features for one protein."""
     try:
-        features = extract_all_features(protein, tables, rmsf_dir=rmsf_dir)
+        features = extract_all_features(protein, tables, rmsf_dir=rmsf_dir,
+                                         include_rmsf=include_rmsf)
         features = standardize_features(features)
-        return build_feature_matrix(features)
+        return build_feature_matrix(features, feature_names=feature_names)
     except Exception as e:
         return None
 
@@ -442,6 +454,70 @@ def build_propensity_tables_from_data(proteins_s4: dict,
     pt.save("oligo_residue", table)
     print(f"  -> oligo_residue done: {len(table)} elements", flush=True)
 
+    # --- Reduced amino acid alphabet tables (aac3 and aac5) ---
+    # Convert AA data to reduced alphabets
+    exp_aac3_flat = convert_list_aac3(exp_aa_flat)
+    comp_aac3 = convert_list_aac3(comp_aa)
+    exp_aac3_windows = [convert_list_aac3(w) for w in exp_aa_windows]
+
+    exp_aac5_flat = convert_list_aac5(exp_aa_flat)
+    comp_aac5 = convert_list_aac5(comp_aa)
+    exp_aac5_windows = [convert_list_aac5(w) for w in exp_aa_windows]
+
+    # --- single_aac3 ---
+    print(f"  Building single_aac3 ({len(exp_aac3_flat)} exp, {len(comp_aac3)} comp)...", flush=True)
+    table = build_propensity_table(exp_aac3_flat, comp_aac3, n_permutations=n_permutations, use_gpu=use_gpu)
+    pt.save("single_aac3", table)
+    print(f"  -> single_aac3 done: {len(table)} elements", flush=True)
+
+    # --- di_aac3 ---
+    exp_di_aac3 = _make_windowed_ngrams(exp_aac3_windows, 2)
+    comp_di_aac3 = _make_ngrams_numpy(comp_aac3, 2)
+    print(f"  Building di_aac3 ({len(exp_di_aac3)} exp, {len(comp_di_aac3)} comp, "
+          f"{len(set(exp_di_aac3)|set(comp_di_aac3))} unique)...", flush=True)
+    table = build_propensity_table(exp_di_aac3, comp_di_aac3, n_permutations=n_permutations, use_gpu=use_gpu)
+    pt.save("di_aac3", table)
+    print(f"  -> di_aac3 done: {len(table)} elements", flush=True)
+
+    # --- oligo_aac3 (tri + tetra + penta combined — keys don't collide by length) ---
+    exp_oligo_aac3 = (_make_windowed_ngrams(exp_aac3_windows, 3) +
+                       _make_windowed_ngrams(exp_aac3_windows, 4) +
+                       _make_windowed_ngrams(exp_aac3_windows, 5))
+    comp_oligo_aac3 = (_make_ngrams_numpy(comp_aac3, 3) +
+                        _make_ngrams_numpy(comp_aac3, 4) +
+                        _make_ngrams_numpy(comp_aac3, 5))
+    print(f"  Building oligo_aac3 ({len(exp_oligo_aac3)} exp, {len(comp_oligo_aac3)} comp, "
+          f"{len(set(exp_oligo_aac3)|set(comp_oligo_aac3))} unique)...", flush=True)
+    table = build_propensity_table(exp_oligo_aac3, comp_oligo_aac3, n_permutations=n_permutations, use_gpu=use_gpu)
+    pt.save("oligo_aac3", table)
+    print(f"  -> oligo_aac3 done: {len(table)} elements", flush=True)
+
+    # --- single_aac5 ---
+    print(f"  Building single_aac5 ({len(exp_aac5_flat)} exp, {len(comp_aac5)} comp)...", flush=True)
+    table = build_propensity_table(exp_aac5_flat, comp_aac5, n_permutations=n_permutations, use_gpu=use_gpu)
+    pt.save("single_aac5", table)
+    print(f"  -> single_aac5 done: {len(table)} elements", flush=True)
+
+    # --- di_aac5 ---
+    exp_di_aac5 = _make_windowed_ngrams(exp_aac5_windows, 2)
+    comp_di_aac5 = _make_ngrams_numpy(comp_aac5, 2)
+    print(f"  Building di_aac5 ({len(exp_di_aac5)} exp, {len(comp_di_aac5)} comp, "
+          f"{len(set(exp_di_aac5)|set(comp_di_aac5))} unique)...", flush=True)
+    table = build_propensity_table(exp_di_aac5, comp_di_aac5, n_permutations=n_permutations, use_gpu=use_gpu)
+    pt.save("di_aac5", table)
+    print(f"  -> di_aac5 done: {len(table)} elements", flush=True)
+
+    # --- oligo_aac5 (tri + tetra combined — aac5 has no 5R) ---
+    exp_oligo_aac5 = (_make_windowed_ngrams(exp_aac5_windows, 3) +
+                       _make_windowed_ngrams(exp_aac5_windows, 4))
+    comp_oligo_aac5 = (_make_ngrams_numpy(comp_aac5, 3) +
+                        _make_ngrams_numpy(comp_aac5, 4))
+    print(f"  Building oligo_aac5 ({len(exp_oligo_aac5)} exp, {len(comp_oligo_aac5)} comp, "
+          f"{len(set(exp_oligo_aac5)|set(comp_oligo_aac5))} unique)...", flush=True)
+    table = build_propensity_table(exp_oligo_aac5, comp_oligo_aac5, n_permutations=n_permutations, use_gpu=use_gpu)
+    pt.save("oligo_aac5", table)
+    print(f"  -> oligo_aac5 done: {len(table)} elements", flush=True)
+
     # --- dssp ---
     print(f"  Building dssp ({len(exp_dssp_flat)} exp, {len(comp_dssp)} comp)...", flush=True)
     table = build_propensity_table(exp_dssp_flat, comp_dssp, n_permutations=n_permutations, use_gpu=use_gpu)
@@ -505,7 +581,16 @@ def main():
                         help="Process proteins in batches")
     parser.add_argument("--rmsf-dir", type=Path, default=Path("data/rmsf"),
                         help="Directory with per-protein RMSF CSVs from CABSflex")
+    parser.add_argument("--include-rmsf", action="store_true",
+                        help="Include RMSF as a feature (47 features instead of 46)")
     args = parser.parse_args()
+
+    # Determine feature names based on RMSF flag
+    feature_names = get_feature_names(include_rmsf=args.include_rmsf)
+
+    # Separate output directory when RMSF is included
+    if args.include_rmsf and str(args.output_dir) == "cpred/data/trained_models":
+        args.output_dir = Path("cpred/data/trained_models_rmsf")
 
     supp_dir = args.data_dir / "supplementary"
     pdb_dir = args.data_dir / "pdb"
@@ -589,6 +674,8 @@ def main():
 
     use_gpu = not args.no_gpu
     required_tables = ["single_aa", "di_residue", "oligo_residue",
+                       "single_aac3", "di_aac3", "oligo_aac3",
+                       "single_aac5", "di_aac5", "oligo_aac5",
                        "dssp", "di_dssp", "ramachandran", "di_ramachandran",
                        "kappa_alpha", "di_kappa_alpha"]
 
@@ -634,7 +721,8 @@ def main():
     pdb_ids = list(dataset_t.keys())
     rmsf_dir = str(args.rmsf_dir) if args.rmsf_dir else None
     worker_args = [
-        (pdb_id, dataset_t[pdb_id], str(pdb_dir / f"{pdb_id}.pdb"), tables, rmsf_dir)
+        (pdb_id, dataset_t[pdb_id], str(pdb_dir / f"{pdb_id}.pdb"), tables,
+         rmsf_dir, args.include_rmsf, feature_names)
         for pdb_id in pdb_ids
     ]
 
@@ -649,10 +737,7 @@ def main():
             all_X.append(X)
             all_y.append(y)
             processed += 1
-            # Per-protein debug: feature stats for a few key features
-            cat_a_mean = X[:, :len([f for f in FEATURE_NAMES if f in
-                                     ["R_aa","R_aac3","RxR_aac3","2R_aac3"]])].mean()
-            rmsf_idx = FEATURE_NAMES.index("rmsf") if "rmsf" in FEATURE_NAMES else None
+            rmsf_idx = feature_names.index("rmsf") if "rmsf" in feature_names else None
             rmsf_info = (f", RMSF nonzero={int(np.count_nonzero(~np.isnan(X[:, rmsf_idx])))}/{len(y)}"
                          if rmsf_idx is not None else "")
             print(f"  {wa[0]}: {len(y)} labeled sites "
@@ -672,7 +757,7 @@ def main():
     n_pos = int(y_train.sum())
     n_neg = len(y_train) - n_pos
     print(f"\n  Training matrix: {X_train.shape}")
-    print(f"  Feature names ({len(FEATURE_NAMES)}): {FEATURE_NAMES[:5]}...{FEATURE_NAMES[-3:]}")
+    print(f"  Feature names ({len(feature_names)}): {feature_names[:5]}...{feature_names[-3:]}")
     print(f"  Positive (viable CP sites): {n_pos}")
     print(f"  Negative (inviable CP sites): {n_neg}")
     print(f"  Ratio: 1:{n_neg / max(n_pos, 1):.1f}")
@@ -693,8 +778,8 @@ def main():
           f"inviable={X_train[neg_mask, cat_b_end:].mean():.4f}")
     # Check key individual features
     for fname in ["R_aa", "RxR_aac3", "rsa", "farness_buried", "rmsf", "gnm_msf"]:
-        if fname in FEATURE_NAMES:
-            idx = FEATURE_NAMES.index(fname)
+        if fname in feature_names:
+            idx = feature_names.index(fname)
             v_mean = X_train[pos_mask, idx].mean()
             n_mean = X_train[neg_mask, idx].mean()
             print(f"    {fname:20s}: viable={v_mean:+.3f}  inviable={n_mean:+.3f}  "
@@ -707,8 +792,8 @@ def main():
     print("STEP 5: Training final ensemble model")
     print("=" * 60)
 
-    ensemble = CPredEnsemble(feature_names=FEATURE_NAMES)
-    ensemble.fit(X_train, y_train, feature_names=FEATURE_NAMES)
+    ensemble = CPredEnsemble(feature_names=feature_names)
+    ensemble.fit(X_train, y_train, feature_names=feature_names)
 
     # Evaluate on training set
     train_probs = ensemble.predict_unsmoothed(X_train)
@@ -742,7 +827,9 @@ def main():
     if dhfr_path.exists() and dhfr_csv.exists():
         try:
             dhfr = parse_pdb(dhfr_path, chain_id="A")
-            X_dhfr = extract_features_for_protein(dhfr, tables, rmsf_dir=rmsf_dir)
+            X_dhfr = extract_features_for_protein(dhfr, tables, rmsf_dir=rmsf_dir,
+                                                    include_rmsf=args.include_rmsf,
+                                                    feature_names=feature_names)
 
             if X_dhfr is not None:
                 # Get DHFR labels

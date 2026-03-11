@@ -35,7 +35,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from cpred.io.pdb_parser import parse_pdb
 from cpred.propensity.tables import PropensityTables
-from cpred.pipeline import FEATURE_NAMES, build_feature_matrix, extract_all_features
+from cpred.pipeline import FEATURE_NAMES, build_feature_matrix, extract_all_features, get_feature_names
 from cpred.features.standardization import standardize_features
 from cpred.models.ann import CPredANN
 from cpred.models.svm import CPredSVM
@@ -45,14 +45,17 @@ from cpred.models.ensemble import smooth_predictions
 from cpred.training.evaluate import compute_metrics
 
 
-def extract_features_for_protein(protein, tables, rmsf_dir=None):
+def extract_features_for_protein(protein, tables, rmsf_dir=None,
+                                  include_rmsf=False, feature_names=None):
     """Extract and standardize all features for one protein."""
-    features = extract_all_features(protein, tables, rmsf_dir=rmsf_dir)
+    features = extract_all_features(protein, tables, rmsf_dir=rmsf_dir,
+                                     include_rmsf=include_rmsf)
     features = standardize_features(features)
-    return build_feature_matrix(features)
+    return build_feature_matrix(features, feature_names=feature_names)
 
 
-def load_training_data(data_dir: Path, tables_dir: Path, rmsf_dir: Path):
+def load_training_data(data_dir: Path, tables_dir: Path, rmsf_dir: Path,
+                       include_rmsf: bool = False):
     """Load Dataset T training features and DHFR test features."""
     supp_dir = data_dir / "supplementary"
     pdb_dir = data_dir / "pdb"
@@ -77,12 +80,16 @@ def load_training_data(data_dir: Path, tables_dir: Path, rmsf_dir: Path):
         else:
             proteins[pdb_id]['sites_inviable'].append(int(row['residue_number']))
 
+    feat_names = get_feature_names(include_rmsf=include_rmsf)
+
     all_X, all_y = [], []
     rmsf_dir_str = str(rmsf_dir) if rmsf_dir else None
     for pdb_id, info in proteins.items():
         pdb_path = pdb_dir / f"{pdb_id}.pdb"
         protein = parse_pdb(pdb_path, chain_id=info["chain"])
-        X = extract_features_for_protein(protein, tables, rmsf_dir=rmsf_dir_str)
+        X = extract_features_for_protein(protein, tables, rmsf_dir=rmsf_dir_str,
+                                          include_rmsf=include_rmsf,
+                                          feature_names=feat_names)
         if X is None:
             continue
         resnum_to_idx = {rn: i for i, rn in enumerate(protein.residue_numbers)}
@@ -107,7 +114,9 @@ def load_training_data(data_dir: Path, tables_dir: Path, rmsf_dir: Path):
     dhfr_path = pdb_dir / "1rx4.pdb"
     dhfr_csv = supp_dir / "dataset_dhfr.csv"
     dhfr = parse_pdb(dhfr_path, chain_id="A")
-    X_dhfr_full = extract_features_for_protein(dhfr, tables, rmsf_dir=rmsf_dir_str)
+    X_dhfr_full = extract_features_for_protein(dhfr, tables, rmsf_dir=rmsf_dir_str,
+                                                include_rmsf=include_rmsf,
+                                                feature_names=feat_names)
     dhfr_df = pd.read_csv(dhfr_csv)
     resnum_to_idx = {rn: i for i, rn in enumerate(dhfr.residue_numbers)}
     labeled_indices, labels = [], []
@@ -388,7 +397,8 @@ def search_rf(X_train, y_train, X_dhfr_full, labeled_indices, y_dhfr,
 # =====================================================================
 def evaluate_ensemble(X_train, y_train, X_dhfr_full, labeled_indices, y_dhfr,
                       best_ann_params, best_svm_params, best_rf_params,
-                      output_dir: Path = Path("results/best_models")):
+                      output_dir: Path = Path("results/best_models"),
+                      feature_names: list[str] | None = None):
     """Train best models, evaluate ensemble on DHFR, and save model weights."""
     print(f"\n{'='*60}")
     print(f"ENSEMBLE EVALUATION (best of each model)")
@@ -452,8 +462,9 @@ def evaluate_ensemble(X_train, y_train, X_dhfr_full, labeled_indices, y_dhfr,
 
     # HI (fixed weights)
     print("  Training HI...")
-    hi = CPredHierarchical(feature_names=FEATURE_NAMES)
-    hi.fit(X_train, y_train, feature_names=FEATURE_NAMES)
+    feat_names = feature_names if feature_names is not None else FEATURE_NAMES
+    hi = CPredHierarchical(feature_names=feat_names)
+    hi.fit(X_train, y_train, feature_names=feat_names)
     p_hi = hi.predict(X_dhfr_full)
 
     # Individual model metrics
@@ -529,16 +540,27 @@ def main():
                         help="Only search SVM hyperparameters")
     parser.add_argument("--rf-only", action="store_true",
                         help="Only search RF hyperparameters")
-    parser.add_argument("--output", type=Path,
-                        default=Path("results/hyperparameter_search.json"))
+    parser.add_argument("--output", type=Path, default=None,
+                        help="Output JSON path (auto-set based on --include-rmsf if omitted)")
+    parser.add_argument("--include-rmsf", action="store_true",
+                        help="Include RMSF as a feature (47 features instead of 46)")
     args = parser.parse_args()
 
+    # Auto-set output path based on RMSF flag
+    if args.output is None:
+        if args.include_rmsf:
+            args.output = Path("results/hyperparameter_search_rmsf.json")
+        else:
+            args.output = Path("results/hyperparameter_search.json")
     args.output.parent.mkdir(parents=True, exist_ok=True)
+
+    feat_names = get_feature_names(include_rmsf=args.include_rmsf)
 
     print("Loading training data and extracting features...")
     t0 = time.time()
     X_train, y_train, X_dhfr_full, labeled_indices, y_dhfr, tables = \
-        load_training_data(args.data_dir, args.tables_dir, args.rmsf_dir)
+        load_training_data(args.data_dir, args.tables_dir, args.rmsf_dir,
+                           include_rmsf=args.include_rmsf)
     print(f"  Training: {X_train.shape}, Test (DHFR full): {X_dhfr_full.shape}, "
           f"DHFR labeled: {len(y_dhfr)} ({int(y_dhfr.sum())} viable)")
     print(f"  Feature extraction took {time.time()-t0:.1f}s")
@@ -570,10 +592,12 @@ def main():
         best_svm = svm_results[0]
         best_rf = rf_results[0]
 
+        models_dir = "best_models_rmsf" if args.include_rmsf else "best_models"
         ens_results = evaluate_ensemble(
             X_train, y_train, X_dhfr_full, labeled_indices, y_dhfr,
             best_ann, best_svm, best_rf,
-            output_dir=args.output.parent / "best_models")
+            output_dir=args.output.parent / models_dir,
+            feature_names=feat_names)
         all_results["ensemble"] = ens_results
 
     # Save results

@@ -15,7 +15,13 @@ DATA_DIR = Path(__file__).parent.parent / "data" / "propensity_tables"
 TABLE_NAMES = [
     "single_aa",       # Single amino acid propensity
     "di_residue",      # Di-residue (pair) propensity
-    "oligo_residue",   # Oligo-residue (triplet) propensity
+    "oligo_residue",   # Oligo-residue (triplet+) propensity
+    "single_aac3",     # Single reduced 3-class amino acid propensity
+    "di_aac3",         # Di-code 3-class propensity
+    "oligo_aac3",      # Oligo 3-class propensity (tri/tetra/penta)
+    "single_aac5",     # Single reduced 5-class amino acid propensity
+    "di_aac5",         # Di-code 5-class propensity
+    "oligo_aac5",      # Oligo 5-class propensity (tri/tetra/penta)
     "dssp",            # DSSP secondary structure propensity (single code)
     "di_dssp",         # DSSP di-code propensity (coupled pair)
     "ramachandran",    # Ramachandran code propensity (single code)
