@@ -26,8 +26,9 @@ Paper weights are FIXED, not optimized per fold (the paper optimized once
 on the full Dataset T using exhaustive search evaluated by 10-fold averaged
 MCC, then fixed the weights).
 
-Probability conversion: count N_p (positive training IF >= IF_i) and
-N_n (negative training IF <= IF_i), then P = N_p / (N_p + N_n).
+Probability conversion: count N_p (positive training IF <= IF_i) and
+N_n (negative training IF >= IF_i), then P = N_p / (N_p + N_n).
+(Comparison directions account for pre-inverted features in standardization.)
 """
 
 from __future__ import annotations
@@ -62,17 +63,25 @@ _CAT_A_SUBGROUPS = {
         "features": {"RxR_aa": 0.10, "RxR_aac3": 0.89, "RxR_aac5": 0.01},
         "weight": 0.75,
     },
-    "nR_1dprop": {
-        # R2xR, R3xR, 3R, 4R, 5R patterns — combine with equal weight as approximation
-        # Paper shows nR as a single node (weight 0.97) combining remaining patterns
-        "features": {
-            "R2xR_aa": 0.03, "R2xR_aac3": 0.96, "R2xR_aac5": 0.01,
-            "R3xR_aac3": 0.62, "R3xR_aac5": 0.38,
-            "3R_aac3": 0.63, "3R_aac5": 0.01,
-            "4R_aac3": 0.34, "4R_aac5": 0.01,
-            "5R_aac3": 0.01,
-        },
-        "weight": 0.97,
+    "R2xR_1dprop": {
+        "features": {"R2xR_aa": 0.03, "R2xR_aac3": 0.96, "R2xR_aac5": 0.01},
+        "weight": 0.194,
+    },
+    "R3xR_1dprop": {
+        "features": {"R3xR_aac3": 0.62, "R3xR_aac5": 0.38},
+        "weight": 0.194,
+    },
+    "3R_1dprop": {
+        "features": {"3R_aac3": 0.63, "3R_aac5": 0.01},
+        "weight": 0.194,
+    },
+    "4R_1dprop": {
+        "features": {"4R_aac3": 0.34, "4R_aac5": 0.01},
+        "weight": 0.194,
+    },
+    "5R_1dprop": {
+        "features": {"5R_aac3": 0.01},
+        "weight": 0.194,
     },
 }
 
@@ -289,8 +298,8 @@ class CPredHierarchical:
 
         probs = np.zeros(len(if_scores))
         for i, if_val in enumerate(if_scores):
-            n_p = np.sum(self._train_if_pos >= if_val)
-            n_n = np.sum(self._train_if_neg <= if_val)
+            n_p = np.sum(self._train_if_pos <= if_val)
+            n_n = np.sum(self._train_if_neg >= if_val)
             denom = n_p + n_n
             probs[i] = n_p / denom if denom > 0 else 0.5
 

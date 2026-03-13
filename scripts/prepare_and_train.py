@@ -301,6 +301,33 @@ def _make_ngrams_numpy(chars: list[str], n: int) -> list[str]:
     return list(np.apply_along_axis(lambda r: "".join(r), 1, views))
 
 
+def _make_skip_center_4grams_windows(windows: list[list[str]]) -> list[str]:
+    """Extract skip-center 4-grams from windows: positions (j, j+1, j+3, j+4).
+
+    This matches the 4R feature which queries (i-2, i-1, i+1, i+2), skipping center.
+    From a window of length L, we extract patterns where the center position is skipped.
+    """
+    grams = []
+    for window in windows:
+        n = len(window)
+        for j in range(n - 4):
+            # positions j, j+1, j+3, j+4 (skip j+2)
+            grams.append(window[j] + window[j+1] + window[j+3] + window[j+4])
+    return grams
+
+
+def _make_skip_center_4grams_sequence(chars: list[str]) -> list[str]:
+    """Extract skip-center 4-grams from whole sequence: positions (j, j+1, j+3, j+4).
+
+    Matches the coupling pattern used by the 4R feature.
+    """
+    grams = []
+    n = len(chars)
+    for j in range(n - 4):
+        grams.append(chars[j] + chars[j+1] + chars[j+3] + chars[j+4])
+    return grams
+
+
 def _make_windowed_ngrams(windows: list[list[str]], n: int) -> list[str]:
     """Extract n-grams from a list of windows without crossing window boundaries.
 
@@ -479,18 +506,26 @@ def build_propensity_tables_from_data(proteins_s4: dict,
     pt.save("di_aac3", table)
     print(f"  -> di_aac3 done: {len(table)} elements", flush=True)
 
-    # --- oligo_aac3 (tri + tetra + penta combined — keys don't collide by length) ---
-    exp_oligo_aac3 = (_make_windowed_ngrams(exp_aac3_windows, 3) +
-                       _make_windowed_ngrams(exp_aac3_windows, 4) +
-                       _make_windowed_ngrams(exp_aac3_windows, 5))
-    comp_oligo_aac3 = (_make_ngrams_numpy(comp_aac3, 3) +
-                        _make_ngrams_numpy(comp_aac3, 4) +
-                        _make_ngrams_numpy(comp_aac3, 5))
-    print(f"  Building oligo_aac3 ({len(exp_oligo_aac3)} exp, {len(comp_oligo_aac3)} comp, "
-          f"{len(set(exp_oligo_aac3)|set(comp_oligo_aac3))} unique)...", flush=True)
-    table = build_propensity_table(exp_oligo_aac3, comp_oligo_aac3, n_permutations=n_permutations, use_gpu=use_gpu)
-    pt.save("oligo_aac3", table)
-    print(f"  -> oligo_aac3 done: {len(table)} elements", flush=True)
+    # --- oligo_aac3 (build each n-gram length separately, then merge) ---
+    # 3-grams (consecutive)
+    exp_3g_aac3 = _make_windowed_ngrams(exp_aac3_windows, 3)
+    comp_3g_aac3 = _make_ngrams_numpy(comp_aac3, 3)
+    print(f"  Building oligo_aac3 tri-grams ({len(exp_3g_aac3)} exp, {len(comp_3g_aac3)} comp)...", flush=True)
+    table3_aac3 = build_propensity_table(exp_3g_aac3, comp_3g_aac3, n_permutations=n_permutations, use_gpu=use_gpu)
+    # 4-grams (skip-center: positions j, j+1, j+3, j+4)
+    exp_4g_aac3 = _make_skip_center_4grams_windows(exp_aac3_windows)
+    comp_4g_aac3 = _make_skip_center_4grams_sequence(comp_aac3)
+    print(f"  Building oligo_aac3 skip-center 4-grams ({len(exp_4g_aac3)} exp, {len(comp_4g_aac3)} comp)...", flush=True)
+    table4_aac3 = build_propensity_table(exp_4g_aac3, comp_4g_aac3, n_permutations=n_permutations, use_gpu=use_gpu)
+    # 5-grams (consecutive)
+    exp_5g_aac3 = _make_windowed_ngrams(exp_aac3_windows, 5)
+    comp_5g_aac3 = _make_ngrams_numpy(comp_aac3, 5)
+    print(f"  Building oligo_aac3 penta-grams ({len(exp_5g_aac3)} exp, {len(comp_5g_aac3)} comp)...", flush=True)
+    table5_aac3 = build_propensity_table(exp_5g_aac3, comp_5g_aac3, n_permutations=n_permutations, use_gpu=use_gpu)
+    # Merge (keys don't collide by length)
+    oligo_aac3_combined = {**table3_aac3, **table4_aac3, **table5_aac3}
+    pt.save("oligo_aac3", oligo_aac3_combined)
+    print(f"  -> oligo_aac3 done: {len(oligo_aac3_combined)} elements", flush=True)
 
     # --- single_aac5 ---
     print(f"  Building single_aac5 ({len(exp_aac5_flat)} exp, {len(comp_aac5)} comp)...", flush=True)
@@ -507,16 +542,21 @@ def build_propensity_tables_from_data(proteins_s4: dict,
     pt.save("di_aac5", table)
     print(f"  -> di_aac5 done: {len(table)} elements", flush=True)
 
-    # --- oligo_aac5 (tri + tetra combined — aac5 has no 5R) ---
-    exp_oligo_aac5 = (_make_windowed_ngrams(exp_aac5_windows, 3) +
-                       _make_windowed_ngrams(exp_aac5_windows, 4))
-    comp_oligo_aac5 = (_make_ngrams_numpy(comp_aac5, 3) +
-                        _make_ngrams_numpy(comp_aac5, 4))
-    print(f"  Building oligo_aac5 ({len(exp_oligo_aac5)} exp, {len(comp_oligo_aac5)} comp, "
-          f"{len(set(exp_oligo_aac5)|set(comp_oligo_aac5))} unique)...", flush=True)
-    table = build_propensity_table(exp_oligo_aac5, comp_oligo_aac5, n_permutations=n_permutations, use_gpu=use_gpu)
-    pt.save("oligo_aac5", table)
-    print(f"  -> oligo_aac5 done: {len(table)} elements", flush=True)
+    # --- oligo_aac5 (build each n-gram length separately, then merge — no 5R for aac5) ---
+    # 3-grams (consecutive)
+    exp_3g_aac5 = _make_windowed_ngrams(exp_aac5_windows, 3)
+    comp_3g_aac5 = _make_ngrams_numpy(comp_aac5, 3)
+    print(f"  Building oligo_aac5 tri-grams ({len(exp_3g_aac5)} exp, {len(comp_3g_aac5)} comp)...", flush=True)
+    table3_aac5 = build_propensity_table(exp_3g_aac5, comp_3g_aac5, n_permutations=n_permutations, use_gpu=use_gpu)
+    # 4-grams (skip-center: positions j, j+1, j+3, j+4)
+    exp_4g_aac5 = _make_skip_center_4grams_windows(exp_aac5_windows)
+    comp_4g_aac5 = _make_skip_center_4grams_sequence(comp_aac5)
+    print(f"  Building oligo_aac5 skip-center 4-grams ({len(exp_4g_aac5)} exp, {len(comp_4g_aac5)} comp)...", flush=True)
+    table4_aac5 = build_propensity_table(exp_4g_aac5, comp_4g_aac5, n_permutations=n_permutations, use_gpu=use_gpu)
+    # Merge (keys don't collide by length)
+    oligo_aac5_combined = {**table3_aac5, **table4_aac5}
+    pt.save("oligo_aac5", oligo_aac5_combined)
+    print(f"  -> oligo_aac5 done: {len(oligo_aac5_combined)} elements", flush=True)
 
     # --- dssp ---
     print(f"  Building dssp ({len(exp_dssp_flat)} exp, {len(comp_dssp)} comp)...", flush=True)
