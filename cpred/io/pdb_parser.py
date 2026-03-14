@@ -108,6 +108,15 @@ def _ensure_dssp_env():
         os.environ["LD_LIBRARY_PATH"] = f"{conda_lib}:{ld_path}" if ld_path else conda_lib
 
 
+def _reduce_dssp_3state(code: str) -> str:
+    """Reduce 8-state DSSP to 3-state (H/E/C) per Lo et al. 2012."""
+    if code in ("H", "G", "I"):  # all helix types
+        return "H"
+    if code in ("E", "B"):       # all strand types
+        return "E"
+    return "C"                    # everything else (T, S, -, C)
+
+
 def run_dssp(pdb_path: Path, model, chain_id: str,
              residues: list[Residue]) -> DSSPResult | None:
     """Run DSSP on structure and extract per-residue results."""
@@ -147,7 +156,8 @@ def run_dssp(pdb_path: Path, model, chain_id: str,
             continue
 
         dssp_data = dssp[dssp_key]
-        ss[idx] = dssp_data[2] if dssp_data[2] != "-" else "C"
+        raw_ss = dssp_data[2] if dssp_data[2] != "-" else "C"
+        ss[idx] = _reduce_dssp_3state(raw_ss)
         rsa[idx] = dssp_data[3]
         phi[idx] = dssp_data[4]
         psi[idx] = dssp_data[5]

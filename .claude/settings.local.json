@@ -27,7 +27,8 @@
       "Bash(pdftotext:*)",
       "Bash(xargs grep:*)",
       "Bash(ls:*)",
-      "Bash(wc -l C:\\\\Users\\\\gianl\\\\OneDrive\\\\Desktop\\\\PhD\\\\Coding\\\\Git\\\\CPred\\\\cpred\\\\features\\\\*.py)"
+      "Bash(wc -l C:\\\\Users\\\\gianl\\\\OneDrive\\\\Desktop\\\\PhD\\\\Coding\\\\Git\\\\CPred\\\\cpred\\\\features\\\\*.py)",
+      "Bash(find /c/Users/gianl/OneDrive/Desktop/PhD/Coding/Git/CPred/scripts -name \"*.py\" | xargs basename -a | sort)"
     ]
   }
 }

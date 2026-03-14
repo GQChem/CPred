@@ -73,26 +73,26 @@ Building propensity tables from training data...
     CPU: generating 99999 permutations of 211907 elements...
     CPU: processed elements 400/400
   -> di_residue done: 400 elements
-  Building oligo_residue (4594 exp, 206393 comp, 7916 unique)...
-    CPU mode (7916 elements, 99999 permutations)
+  Building oligo_residue (4594 exp, 206393 comp, 7917 unique)...
+    CPU mode (7917 elements, 99999 permutations)
     CPU: generating 99999 permutations of 210987 elements...
-    CPU: processed elements 512/7916
-    CPU: processed elements 1024/7916
-    CPU: processed elements 1536/7916
-    CPU: processed elements 2048/7916
-    CPU: processed elements 2560/7916
-    CPU: processed elements 3072/7916
-    CPU: processed elements 3584/7916
-    CPU: processed elements 4096/7916
-    CPU: processed elements 4608/7916
-    CPU: processed elements 5120/7916
-    CPU: processed elements 5632/7916
-    CPU: processed elements 6144/7916
-    CPU: processed elements 6656/7916
-    CPU: processed elements 7168/7916
-    CPU: processed elements 7680/7916
-    CPU: processed elements 7916/7916
-  -> oligo_residue done: 7916 elements
+    CPU: processed elements 512/7917
+    CPU: processed elements 1024/7917
+    CPU: processed elements 1536/7917
+    CPU: processed elements 2048/7917
+    CPU: processed elements 2560/7917
+    CPU: processed elements 3072/7917
+    CPU: processed elements 3584/7917
+    CPU: processed elements 4096/7917
+    CPU: processed elements 4608/7917
+    CPU: processed elements 5120/7917
+    CPU: processed elements 5632/7917
+    CPU: processed elements 6144/7917
+    CPU: processed elements 6656/7917
+    CPU: processed elements 7168/7917
+    CPU: processed elements 7680/7917
+    CPU: processed elements 7917/7917
+  -> oligo_residue done: 7917 elements
   Building single_aac3 (6432 exp, 206395 comp)...
     CPU mode (3 elements, 99999 permutations)
     CPU: generating 99999 permutations of 212827 elements...
@@ -103,10 +103,18 @@ Building propensity tables from training data...
     CPU: generating 99999 permutations of 211907 elements...
     CPU: processed elements 9/9
   -> di_aac3 done: 9 elements
-  Building oligo_aac3 (11025 exp, 619176 comp, 351 unique)...
-    CPU mode (351 elements, 99999 permutations)
-    CPU: generating 99999 permutations of 630201 elements...
-    CPU: processed elements 351/351
+  Building oligo_aac3 tri-grams (4594 exp, 206393 comp)...
+    CPU mode (27 elements, 99999 permutations)
+    CPU: generating 99999 permutations of 210987 elements...
+    CPU: processed elements 27/27
+  Building oligo_aac3 skip-center 4-grams (2756 exp, 206391 comp)...
+    CPU mode (81 elements, 99999 permutations)
+    CPU: generating 99999 permutations of 209147 elements...
+    CPU: processed elements 81/81
+  Building oligo_aac3 penta-grams (2756 exp, 206391 comp)...
+    CPU mode (243 elements, 99999 permutations)
+    CPU: generating 99999 permutations of 209147 elements...
+    CPU: processed elements 243/243
   -> oligo_aac3 done: 351 elements
   Building single_aac5 (6432 exp, 206395 comp)...
     CPU mode (5 elements, 99999 permutations)
@@ -118,11 +126,15 @@ Building propensity tables from training data...
     CPU: generating 99999 permutations of 211907 elements...
     CPU: processed elements 25/25
   -> di_aac5 done: 25 elements
-  Building oligo_aac5 (8269 exp, 412785 comp, 750 unique)...
-    CPU mode (750 elements, 99999 permutations)
-    CPU: generating 99999 permutations of 421054 elements...
-    CPU: processed elements 512/750
-    CPU: processed elements 750/750
+  Building oligo_aac5 tri-grams (4594 exp, 206393 comp)...
+    CPU mode (125 elements, 99999 permutations)
+    CPU: generating 99999 permutations of 210987 elements...
+    CPU: processed elements 125/125
+  Building oligo_aac5 skip-center 4-grams (2756 exp, 206391 comp)...
+    CPU mode (625 elements, 99999 permutations)
+    CPU: generating 99999 permutations of 209147 elements...
+    CPU: processed elements 512/625
+    CPU: processed elements 625/625
   -> oligo_aac5 done: 750 elements
   Building dssp (6432 exp, 206395 comp)...
     CPU mode (9 elements, 99999 permutations)
@@ -176,11 +188,11 @@ STEP 4: Extracting features (Dataset T proteins only)
   (No downsampling needed — Dataset T is naturally balanced)
 
   Feature means (viable vs inviable):
-    Cat A (seq propensity):  viable=0.1390  inviable=-0.0918
-    Cat B (SS propensity):   viable=0.3459  inviable=-0.0964
+    Cat A (seq propensity):  viable=0.1267  inviable=-0.0798
+    Cat B (SS propensity):   viable=0.3471  inviable=-0.0958
     Cat C (tertiary):        viable=0.4706  inviable=-0.2032
     R_aa                : viable=+0.313  inviable=+0.056  diff=+0.257
-    RxR_aac3            : viable=+0.131  inviable=-0.311  diff=+0.442
+    RxR_aac3            : viable=+0.132  inviable=-0.311  diff=+0.443
     rsa                 : viable=+0.650  inviable=-0.184  diff=+0.834
     farness_buried      : viable=+0.465  inviable=-0.308  diff=+0.772
     gnm_msf             : viable=+0.448  inviable=-0.213  diff=+0.661
@@ -195,12 +207,12 @@ Training Hierarchical model...
 Ensemble training complete.
 
 Ensemble training set metrics:
-  auc: 0.9986
-  sensitivity: 1.0000
+  auc: 0.9949
+  sensitivity: 0.9868
   specificity: 0.9700
-  accuracy: 0.9830
-  mcc: 0.9660
-  threshold: 0.4615
+  accuracy: 0.9773
+  mcc: 0.9541
+  threshold: 0.5169
 
   RF metrics:
     auc: 1.0000
@@ -208,31 +220,31 @@ Ensemble training set metrics:
     specificity: 1.0000
     accuracy: 1.0000
     mcc: 1.0000
-    threshold: 0.7140
+    threshold: 0.7040
 
   SVM metrics:
-    auc: 0.8643
-    sensitivity: 1.0000
-    specificity: 0.5600
-    accuracy: 0.7500
-    mcc: 0.5955
-    threshold: 0.2540
+    auc: 0.8508
+    sensitivity: 0.9737
+    specificity: 0.5700
+    accuracy: 0.7443
+    mcc: 0.5705
+    threshold: 0.3235
 
   ANN metrics:
-    auc: 0.9891
+    auc: 0.9904
     sensitivity: 0.9868
     specificity: 0.9300
     accuracy: 0.9545
     mcc: 0.9104
-    threshold: 0.2100
+    threshold: 0.1801
 
   HI metrics:
-    auc: 0.1789
-    sensitivity: 1.0000
-    specificity: 0.0000
-    accuracy: 0.4318
-    mcc: 0.0000
-    threshold: 0.0000
+    auc: 0.8243
+    sensitivity: 0.8816
+    specificity: 0.6600
+    accuracy: 0.7557
+    mcc: 0.5425
+    threshold: 0.2273
 
 Models saved to cpred/data/trained_models
 
@@ -241,16 +253,16 @@ STEP 6: Independent test on DHFR (1RX4)
 ============================================================
 
   DHFR results (159 sites, 86 viable, 73 inviable):
-    auc: 0.7488
-    sensitivity: 0.8605
-    specificity: 0.6438
+    auc: 0.7912
+    sensitivity: 0.8023
+    specificity: 0.7123
     accuracy: 0.7610
-    mcc: 0.5202
-    threshold: 0.3872
-    [RF ] AUC=0.7511  Sens=0.802  Spec=0.644  MCC=0.453
-    [SVM] AUC=0.8095  Sens=0.872  Spec=0.658  MCC=0.546
-    [ANN] AUC=0.6523  Sens=0.674  Spec=0.685  MCC=0.358
-    [HI ] AUC=0.2107  Sens=1.000  Spec=0.000  MCC=0.000
+    mcc: 0.5175
+    threshold: 0.3767
+    [RF ] AUC=0.7451  Sens=0.779  Spec=0.658  MCC=0.441
+    [SVM] AUC=0.8254  Sens=0.826  Spec=0.699  MCC=0.530
+    [ANN] AUC=0.6891  Sens=0.686  Spec=0.658  MCC=0.343
+    [HI ] AUC=0.7952  Sens=0.791  Spec=0.685  MCC=0.479
 
   Paper reference (DHFR independent test):
     AUC:         0.906
@@ -260,16 +272,16 @@ STEP 6: Independent test on DHFR (1RX4)
 
   Top 10 predicted CP sites:
    Res#  AA   Prob
-     35   T 0.6823
-     51   G 0.6790
-     36   L 0.6693
-     52   R 0.6481
-     70   D 0.6379
-     34   N 0.6356
-     50   I 0.6260
-     18   N 0.6242
-     56   G 0.6198
-     13   V 0.6193
+     70   D 0.8758
+     18   N 0.8352
+     71   R 0.8202
+    120   E 0.8193
+     69   D 0.7931
+     17   E 0.7911
+    121   G 0.7896
+     37   D 0.7818
+     19   A 0.7705
+    147   N 0.7632
 
 ============================================================
 TRAINING COMPLETE!
