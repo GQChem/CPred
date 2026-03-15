@@ -10,8 +10,11 @@ Tree structure (3 categories → root IF):
     R_1dprop (R_aa=0.27, R_aac3=0.70, R_aac5=0.03) weight 0.01
     2R_1dprop (2R_aa=0.26, 2R_aac3=0.47, 2R_aac5=0.27) weight 0.01
     RxR_1dprop (RxR_aa=0.10, RxR_aac3=0.89, RxR_aac5=0.01) weight 0.75
-    → 1dprop (R_1dprop, 2R_1dprop, RxR_1dprop, nR_1dprop) weight 0.14
-    ...etc per Figure 4
+    RnxR_1dprop (intermediate, weight 0.01):
+      R2xR_1dprop (R2xR_aa=0.03, R2xR_aac3=0.96, R2xR_aac5=0.01) weight 0.23
+      R3xR_1dprop (R3xR_aac3=0.62, R3xR_aac5=0.38) weight 0.02
+    nR_1dprop (3R_aac3=0.63, 3R_aac5=0.01, 4R_aac3=0.01,
+               4R_aac5=0.34, 5R_aac3=0.01) weight 0.97
   Cat B (2dprop, weight 0.57)
   Cat C (3dprop, weight 0.29):
     Solacc (RSA=1.00) weight 0.04
@@ -47,68 +50,67 @@ from sklearn.metrics import roc_auc_score
 # Category A: primary sequence propensity (1dprop)
 # Weights from Figure 4 branches. New feature names match sequence_propensity.py.
 
-_CAT_A_SUBGROUPS = {
+_CAT_A_TREE = {
     "R_1dprop": {
-        # R_aa=0.27, R_aac3=0.70, R_aac5=0.03
         "features": {"R_aa": 0.27, "R_aac3": 0.70, "R_aac5": 0.03},
         "weight": 0.01,
     },
     "2R_1dprop": {
-        # 2R_aa=0.26, 2R_aac3=0.47, 2R_aac5=0.27
         "features": {"2R_aa": 0.26, "2R_aac3": 0.47, "2R_aac5": 0.27},
         "weight": 0.01,
     },
     "RxR_1dprop": {
-        # RxR_aa=0.10, RxR_aac3=0.89, RxR_aac5=0.01
         "features": {"RxR_aa": 0.10, "RxR_aac3": 0.89, "RxR_aac5": 0.01},
         "weight": 0.75,
     },
-    "R2xR_1dprop": {
-        "features": {"R2xR_aa": 0.03, "R2xR_aac3": 0.96, "R2xR_aac5": 0.01},
-        "weight": 0.194,
+    "RnxR_1dprop": {
+        "children": {
+            "R2xR_1dprop": {
+                "features": {"R2xR_aa": 0.03, "R2xR_aac3": 0.96, "R2xR_aac5": 0.01},
+                "weight": 0.23,
+            },
+            "R3xR_1dprop": {
+                "features": {"R3xR_aac3": 0.62, "R3xR_aac5": 0.38},
+                "weight": 0.02,
+            },
+        },
+        "weight": 0.01,
     },
-    "R3xR_1dprop": {
-        "features": {"R3xR_aac3": 0.62, "R3xR_aac5": 0.38},
-        "weight": 0.194,
-    },
-    "3R_1dprop": {
-        "features": {"3R_aac3": 0.63, "3R_aac5": 0.01},
-        "weight": 0.194,
-    },
-    "4R_1dprop": {
-        "features": {"4R_aac3": 0.34, "4R_aac5": 0.01},
-        "weight": 0.194,
-    },
-    "5R_1dprop": {
-        "features": {"5R_aac3": 0.01},
-        "weight": 0.194,
+    "nR_1dprop": {
+        "features": {
+            "3R_aac3": 0.63, "3R_aac5": 0.01,
+            "4R_aac3": 0.01, "4R_aac5": 0.34,
+            "5R_aac3": 0.01,
+        },
+        "weight": 0.97,
     },
 }
 
 # Category B: secondary structure propensity (2dprop)
 # Weights from Figure 4, mapped to new feature names from secondary_structure.py
-_CAT_B_SUBGROUPS = {
+_CAT_B_TREE = {
     "R_2dprop": {
-        # R_sse=0.87, R_rm=0.01, R_ka=0.12
         "features": {"R_sse": 0.87, "R_rm": 0.01, "R_ka": 0.12},
         "weight": 0.83,
     },
     "2R_2dprop": {
-        # 2R_sse=0.82, 2R_rm=0.06, 2R_ka=0.12
         "features": {"2R_sse": 0.82, "2R_rm": 0.06, "2R_ka": 0.12},
         "weight": 0.01,
     },
     "RxR_2dprop": {
-        # RxR_sse=0.73, RxR_rm=0.08, RxR_ka=0.19
         "features": {"RxR_sse": 0.73, "RxR_rm": 0.08, "RxR_ka": 0.19},
         "weight": 0.94,
     },
     "RnxR_2dprop": {
-        # R2xR + R3xR combined — R2xR_sse=0.67, R2xR_rm=0.21, R2xR_ka=0.12
-        #                         R3xR_sse=0.24, R3xR_rm=0.35, R3xR_ka=0.41
-        "features": {
-            "R2xR_sse": 0.335, "R2xR_rm": 0.105, "R2xR_ka": 0.06,
-            "R3xR_sse": 0.12,  "R3xR_rm":  0.175, "R3xR_ka": 0.205,
+        "children": {
+            "R2xR_2dprop": {
+                "features": {"R2xR_sse": 0.67, "R2xR_rm": 0.21, "R2xR_ka": 0.12},
+                "weight": 0.01,
+            },
+            "R3xR_2dprop": {
+                "features": {"R3xR_sse": 0.24, "R3xR_rm": 0.35, "R3xR_ka": 0.41},
+                "weight": 0.05,
+            },
         },
         "weight": 0.16,
     },
@@ -187,7 +189,7 @@ class CPredHierarchical:
 
     def _compute_subgroup_score(self, X: np.ndarray,
                                 subgroup: dict) -> np.ndarray:
-        """Compute weighted average score for a feature subgroup."""
+        """Compute weighted average score for a leaf node with features."""
         score = np.zeros(X.shape[0])
         total_w = 0.0
         for feat_name, w in subgroup["features"].items():
@@ -199,29 +201,47 @@ class CPredHierarchical:
             score /= total_w
         return score
 
+    def _compute_node_score(self, X: np.ndarray, node: dict) -> np.ndarray:
+        """Compute score for a tree node (leaf or intermediate).
+
+        Leaf nodes have a "features" key and are scored via weighted average.
+        Intermediate nodes have a "children" key and recursively combine
+        child scores via weighted average.
+        """
+        if "features" in node:
+            return self._compute_subgroup_score(X, node)
+        # Intermediate node: recurse into children
+        score = np.zeros(X.shape[0])
+        total_w = 0.0
+        for child_name, child in node["children"].items():
+            child_score = self._compute_node_score(X, child)
+            score += child_score * child["weight"]
+            total_w += child["weight"]
+        if total_w > 1e-10:
+            score /= total_w
+        return score
+
     def _compute_category_a(self, X: np.ndarray) -> np.ndarray:
         """Compute Category A (1dprop) score."""
-        scores = {}
+        score = np.zeros(X.shape[0])
         total_w = 0.0
-        for name, sg in _CAT_A_SUBGROUPS.items():
-            scores[name] = self._compute_subgroup_score(X, sg) * sg["weight"]
-            total_w += sg["weight"]
-        result = sum(scores.values())
+        for name, node in _CAT_A_TREE.items():
+            score += self._compute_node_score(X, node) * node["weight"]
+            total_w += node["weight"]
         if total_w > 1e-10:
-            result /= total_w
-        return result
+            score /= total_w
+        return score
 
     def _compute_category_b(self, X: np.ndarray) -> np.ndarray:
         """Compute Category B (2dprop) score."""
-        scores = {}
+        score = np.zeros(X.shape[0])
         total_w = 0.0
-        for name, sg in _CAT_B_SUBGROUPS.items():
-            scores[name] = self._compute_subgroup_score(X, sg) * sg["weight"]
-            total_w += sg["weight"]
-        result = sum(scores.values())
+        for name, node in _CAT_B_TREE.items():
+            score += self._compute_node_score(X, node) * node["weight"]
+            total_w += node["weight"]
         if total_w > 1e-10:
-            result /= total_w
-        return result
+            score /= total_w
+        return score
 
     def _compute_category_c(self, X: np.ndarray) -> np.ndarray:
         """Compute Category C (3dprop) score with Awaycore sub-tree."""
