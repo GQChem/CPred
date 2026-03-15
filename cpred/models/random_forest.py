@@ -52,6 +52,7 @@ class CPredRandomForest:
                 criterion="entropy",
                 max_features=max_features,
                 min_samples_leaf=10,
+                max_depth=5,
                 random_state=seed,
             )
             tree.fit(X_boot, y_boot)

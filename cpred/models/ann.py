@@ -4,10 +4,10 @@
 where hidden = round(sqrt(n_features * 1)) = round(sqrt(n_features))
 
 Trained with BCELoss, SGD optimizer (lr=0.1, momentum=0.1, weight_decay=0.01),
-5000 iterations using epoch-based SGD (Lo et al. 2012).
+epoch-based SGD with early stopping (patience=10, min 5 epochs).
 
-Multiple restarts (default 30) with different random seeds; the model with
-best validation loss (20% stratified holdout) is kept.
+Multiple restarts (default 30) with different random seeds; each restart
+uses early stopping on validation loss. Best restart selected by val loss.
 
 Falls back to a simple sklearn MLPClassifier if PyTorch is not available.
 """
@@ -56,9 +56,9 @@ class CPredANN:
     """ANN classifier for CP site prediction."""
 
     def __init__(self, n_features: int = 46, lr: float = 0.1,
-                 momentum: float = 0.1, n_iterations: int = 5000,
+                 momentum: float = 0.1, n_iterations: int = 2000,
                  n_restarts: int = 30, hidden_size: int | None = None,
-                 weight_decay: float = 0.01):
+                 weight_decay: float = 0.01, patience: int = 10):
         self.n_features = n_features
         self.lr = lr
         self.momentum = momentum
@@ -66,6 +66,7 @@ class CPredANN:
         self.n_restarts = n_restarts
         self.hidden_size = hidden_size
         self.weight_decay = weight_decay
+        self.patience = patience
         self._fitted = False
         self._use_torch = HAS_TORCH
         self._model = None
@@ -77,11 +78,12 @@ class CPredANN:
             self._model = CPredANNModule(n_features, hidden_size=hidden_size).to(self.device)
 
     def _train_one(self, X_t: 'torch.Tensor', y_t: 'torch.Tensor',
+                   X_v: 'torch.Tensor', y_v: 'torch.Tensor',
                    seed: int) -> tuple['CPredANNModule', float]:
-        """Train a single ANN with given seed. Returns (model, final_loss).
+        """Train a single ANN with given seed and early stopping.
 
-        Uses epoch-based SGD: shuffles all samples each epoch, processes
-        sequentially. Total updates ≈ n_iterations (ceil(n_iter/n_samples) epochs).
+        Uses epoch-based SGD with patience-based early stopping on validation
+        loss. Returns (model at best val epoch, best val loss).
         """
         torch.manual_seed(seed)
         model = CPredANNModule(self.n_features, hidden_size=self.hidden_size).to(self.device)
@@ -93,9 +95,13 @@ class CPredANN:
         n_epochs = max(1, (self.n_iterations + n_samples - 1) // n_samples)
         gen = torch.Generator().manual_seed(seed)
 
-        model.train()
+        best_val_loss = float('inf')
+        best_state = None
+        epochs_no_improve = 0
+
         updates = 0
         for epoch in range(n_epochs):
+            model.train()
             perm = torch.randperm(n_samples, generator=gen)
             for idx in perm:
                 if updates >= self.n_iterations:
@@ -107,13 +113,24 @@ class CPredANN:
                 optimizer.step()
                 updates += 1
 
-        # Compute full training loss for model selection
-        model.eval()
-        with torch.no_grad():
-            all_pred = model(X_t)
-            full_loss = nn.functional.binary_cross_entropy(all_pred, y_t).item()
+            # End-of-epoch: evaluate on validation set
+            model.eval()
+            with torch.no_grad():
+                val_loss = nn.functional.binary_cross_entropy(
+                    model(X_v), y_v).item()
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_state = {k: v.clone() for k, v in model.state_dict().items()}
+                epochs_no_improve = 0
+            else:
+                epochs_no_improve += 1
 
-        return model, full_loss
+            if epoch >= 5 and epochs_no_improve >= self.patience:
+                break
+
+        model.load_state_dict(best_state)
+        model.eval()
+        return model, best_val_loss
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> None:
         """Train the ANN with multiple restarts, keep best by validation loss."""
@@ -133,11 +150,8 @@ class CPredANN:
             best_val_loss = float('inf')
 
             for restart in range(self.n_restarts):
-                model, _ = self._train_one(X_t, y_t, seed=42 + restart)
-                model.eval()
-                with torch.no_grad():
-                    val_pred = model(X_v)
-                    val_loss = nn.functional.binary_cross_entropy(val_pred, y_v).item()
+                model, val_loss = self._train_one(
+                    X_t, y_t, X_v, y_v, seed=42 + restart)
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
                     best_model = model
