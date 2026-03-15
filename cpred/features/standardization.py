@@ -89,7 +89,7 @@ def zscore_normalize(features: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
             result[name] = np.zeros_like(vals)
             continue
         mu = valid.mean()
-        sigma = valid.std()
+        sigma = valid.std(ddof=1)
         if sigma < 1e-10:
             result[name] = np.zeros_like(vals)
         else:

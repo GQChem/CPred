@@ -1,0 +1,158 @@
+LIBCIFPP_DATA_DIR has been set to: /home/gquarg/data/conda/envs/topology/share/libcifpp
+============================================================
+STEP 1: Parsing datasets
+============================================================
+Dataset T: 6 proteins, 76 viable + 100 inviable = 176 sites
+Dataset S4: 760 proteins with 1087 CP sites (experimental group)
+Dataset S2: 1049 proteins (comparison group, whole sequences)
+
+============================================================
+STEP 2: Downloading PDB structures
+============================================================
+  Progress: 50/1050 (downloaded: 49, failed: 1)
+  Progress: 100/1050 (downloaded: 99, failed: 1)
+  Progress: 150/1050 (downloaded: 149, failed: 1)
+  Progress: 200/1050 (downloaded: 199, failed: 1)
+  Progress: 250/1050 (downloaded: 249, failed: 1)
+  Progress: 300/1050 (downloaded: 299, failed: 1)
+  Progress: 350/1050 (downloaded: 349, failed: 1)
+  Progress: 400/1050 (downloaded: 399, failed: 1)
+  Progress: 450/1050 (downloaded: 449, failed: 1)
+  Progress: 500/1050 (downloaded: 499, failed: 1)
+  Progress: 550/1050 (downloaded: 549, failed: 1)
+  Progress: 600/1050 (downloaded: 599, failed: 1)
+  Progress: 650/1050 (downloaded: 649, failed: 1)
+  Progress: 700/1050 (downloaded: 699, failed: 1)
+  Progress: 750/1050 (downloaded: 749, failed: 1)
+  Progress: 800/1050 (downloaded: 799, failed: 1)
+  Progress: 850/1050 (downloaded: 849, failed: 1)
+  Progress: 900/1050 (downloaded: 899, failed: 1)
+  Progress: 950/1050 (downloaded: 949, failed: 1)
+  Progress: 1000/1050 (downloaded: 999, failed: 1)
+  Progress: 1050/1050 (downloaded: 1049, failed: 1)
+  S2+S4 PDBs - Downloaded: 1049, Failed: 1
+  Dataset T PDBs downloaded: ['1gfl', '1a2j', '2b3p', '2b3q', '5mbn', '1pii']
+  Downloading DHFR (1RX4)...
+
+============================================================
+STEP 3: Building propensity tables (S4 experimental vs S2 comparison)
+============================================================
+  All propensity tables already exist, loading from disk...
+
+============================================================
+STEP 4: Extracting features (Dataset T proteins only)
+============================================================
+  1gfl: 20 labeled sites (9 viable, 11 inviable)
+  1a2j: 22 labeled sites (11 viable, 11 inviable)
+  2b3p: 14 labeled sites (13 viable, 1 inviable)
+  2b3q: 14 labeled sites (3 viable, 11 inviable)
+  5mbn: 64 labeled sites (6 viable, 58 inviable)
+  1pii: 42 labeled sites (34 viable, 8 inviable)
+  Processed: 6, Skipped: 0
+
+  Training matrix: (176, 46)
+  Feature names (46): ['R_aa', 'R_aac3', 'R_aac5', '2R_aa', '2R_aac3']...['dis_hpho', 'farness_buried', 'farness_hydrophobic']
+  Positive (viable CP sites): 76
+  Negative (inviable CP sites): 100
+  Ratio: 1:1.3
+  (No downsampling needed — Dataset T is naturally balanced)
+
+  Feature means (viable vs inviable):
+    Cat A (seq propensity):  viable=0.1267  inviable=-0.0794
+    Cat B (SS propensity):   viable=0.3856  inviable=-0.0741
+    Cat C (tertiary):        viable=0.4706  inviable=-0.2032
+    R_aa                : viable=+0.313  inviable=+0.056  diff=+0.257
+    RxR_aac3            : viable=+0.132  inviable=-0.311  diff=+0.443
+    rsa                 : viable=+0.650  inviable=-0.184  diff=+0.834
+    farness_buried      : viable=+0.465  inviable=-0.308  diff=+0.772
+    gnm_msf             : viable=+0.448  inviable=-0.213  diff=+0.661
+
+============================================================
+STEP 5: Training final ensemble model
+============================================================
+Training Random Forest...
+Training SVM...
+Training ANN...
+Training Hierarchical model...
+Ensemble training complete.
+
+Ensemble training set metrics:
+  auc: 0.9729
+  sensitivity: 0.9868
+  specificity: 0.8800
+  accuracy: 0.9261
+  mcc: 0.8588
+  threshold: 0.5046
+
+  RF metrics:
+    auc: 1.0000
+    sensitivity: 1.0000
+    specificity: 1.0000
+    accuracy: 1.0000
+    mcc: 1.0000
+    threshold: 0.6000
+
+  SVM metrics:
+    auc: 0.8446
+    sensitivity: 0.9737
+    specificity: 0.5900
+    accuracy: 0.7557
+    mcc: 0.5867
+    threshold: 0.3379
+
+  ANN metrics:
+    auc: 0.9924
+    sensitivity: 0.9474
+    specificity: 0.9700
+    accuracy: 0.9602
+    mcc: 0.9189
+    threshold: 0.6044
+
+  HI metrics:
+    auc: 0.8192
+    sensitivity: 0.8947
+    specificity: 0.6400
+    accuracy: 0.7500
+    mcc: 0.5387
+    threshold: 0.2000
+
+Models saved to cpred/data/trained_models
+
+============================================================
+STEP 6: Independent test on DHFR (1RX4)
+============================================================
+
+  DHFR results (159 sites, 86 viable, 73 inviable):
+    auc: 0.8147
+    sensitivity: 0.7674
+    specificity: 0.7397
+    accuracy: 0.7547
+    mcc: 0.5067
+    threshold: 0.4020
+    [RF ] AUC=0.8155  Sens=0.802  Spec=0.753  MCC=0.556
+    [SVM] AUC=0.8307  Sens=0.849  Spec=0.699  MCC=0.556
+    [ANN] AUC=0.7125  Sens=0.802  Spec=0.575  MCC=0.390
+    [HI ] AUC=0.8157  Sens=0.860  Spec=0.658  MCC=0.533
+
+  Paper reference (DHFR independent test):
+    AUC:         0.906
+    Sensitivity: 0.709
+    Specificity: 0.918
+    MCC:         0.633
+
+  Top 10 predicted CP sites:
+   Res#  AA   Prob
+     70   D 0.9021
+    120   E 0.9020
+     65   Q 0.8933
+    121   G 0.8905
+     66   P 0.8813
+    122   D 0.8742
+     69   D 0.8537
+     17   E 0.8387
+     71   R 0.8382
+     67   G 0.8346
+
+============================================================
+TRAINING COMPLETE!
+============================================================

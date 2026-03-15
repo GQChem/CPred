@@ -3,11 +3,11 @@
 3-layer ANN: Linear(n_features, hidden) -> Sigmoid -> Linear(hidden, 1) -> Sigmoid
 where hidden = round(sqrt(n_features * 1)) = round(sqrt(n_features))
 
-Trained with BCELoss, SGD optimizer (lr=0.5, momentum=0.1), 5000 iterations
-each picking one random sample (Lo et al. 2012).
+Trained with BCELoss, SGD optimizer (lr=0.1, momentum=0.1, weight_decay=0.01),
+5000 iterations using epoch-based SGD (Lo et al. 2012).
 
-Multiple restarts (default 5) with different random seeds; the model with
-best training loss is kept.
+Multiple restarts (default 30) with different random seeds; the model with
+best validation loss (20% stratified holdout) is kept.
 
 Falls back to a simple sklearn MLPClassifier if PyTorch is not available.
 """
@@ -55,15 +55,17 @@ if HAS_TORCH:
 class CPredANN:
     """ANN classifier for CP site prediction."""
 
-    def __init__(self, n_features: int = 46, lr: float = 0.5,
+    def __init__(self, n_features: int = 46, lr: float = 0.1,
                  momentum: float = 0.1, n_iterations: int = 5000,
-                 n_restarts: int = 30, hidden_size: int | None = None):
+                 n_restarts: int = 30, hidden_size: int | None = None,
+                 weight_decay: float = 0.01):
         self.n_features = n_features
         self.lr = lr
         self.momentum = momentum
         self.n_iterations = n_iterations
         self.n_restarts = n_restarts
         self.hidden_size = hidden_size
+        self.weight_decay = weight_decay
         self._fitted = False
         self._use_torch = HAS_TORCH
         self._model = None
@@ -84,7 +86,8 @@ class CPredANN:
         torch.manual_seed(seed)
         model = CPredANNModule(self.n_features, hidden_size=self.hidden_size).to(self.device)
         optimizer = torch.optim.SGD(
-            model.parameters(), lr=self.lr, momentum=self.momentum)
+            model.parameters(), lr=self.lr, momentum=self.momentum,
+            weight_decay=self.weight_decay)
 
         n_samples = len(y_t)
         n_epochs = max(1, (self.n_iterations + n_samples - 1) // n_samples)
@@ -113,20 +116,30 @@ class CPredANN:
         return model, full_loss
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> None:
-        """Train the ANN with multiple restarts, keep best."""
+        """Train the ANN with multiple restarts, keep best by validation loss."""
         self.n_features = X.shape[1]
 
         if self._use_torch:
-            X_t = torch.FloatTensor(X).to(self.device)
-            y_t = torch.FloatTensor(y).to(self.device)
+            from sklearn.model_selection import StratifiedShuffleSplit
+            sss = StratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+            train_idx, val_idx = next(sss.split(X, y))
+
+            X_t = torch.FloatTensor(X[train_idx]).to(self.device)
+            y_t = torch.FloatTensor(y[train_idx]).to(self.device)
+            X_v = torch.FloatTensor(X[val_idx]).to(self.device)
+            y_v = torch.FloatTensor(y[val_idx]).to(self.device)
 
             best_model = None
-            best_loss = float('inf')
+            best_val_loss = float('inf')
 
             for restart in range(self.n_restarts):
-                model, loss = self._train_one(X_t, y_t, seed=42 + restart)
-                if loss < best_loss:
-                    best_loss = loss
+                model, _ = self._train_one(X_t, y_t, seed=42 + restart)
+                model.eval()
+                with torch.no_grad():
+                    val_pred = model(X_v)
+                    val_loss = nn.functional.binary_cross_entropy(val_pred, y_v).item()
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
                     best_model = model
 
             self._model = best_model
