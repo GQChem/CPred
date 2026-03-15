@@ -349,7 +349,8 @@ def build_propensity_tables_from_data(proteins_s4: dict,
                                        pdb_dir: Path,
                                        tables_dir: Path,
                                        use_gpu: bool = True,
-                                       n_permutations: int = 99999) -> PropensityTables:
+                                       n_permutations: int = 99999,
+                                       only_tables: list = None) -> PropensityTables:
     """Build propensity tables from experimental CP sites vs whole sequences.
 
     Experimental group: CP site ±3-residue windows from Dataset S4 (nrCPsitecpdb-40,
@@ -360,8 +361,14 @@ def build_propensity_tables_from_data(proteins_s4: dict,
     Args:
         proteins_s4: {pdb_id: {chain, sites: [int]}} — experimental (CP sites)
         proteins_s2: {pdb_id: chain} — comparison (nrCPDB-40 whole sequences)
+        only_tables: if provided, only build these specific tables (skip others)
     """
+    def _need(name):
+        return only_tables is None or name in only_tables
+
     print("Building propensity tables from training data...")
+    if only_tables:
+        print(f"  Only rebuilding: {sorted(only_tables)}")
 
     # --- Parse experimental proteins (Dataset S4: CP site windows + whole seq) ---
     s4_args = [
@@ -458,147 +465,166 @@ def build_propensity_tables_from_data(proteins_s4: dict,
         raise RuntimeError("No Kappa-Alpha data collected")
 
     # --- single AA ---
-    print(f"  Building single_aa ({len(exp_aa_flat)} exp, {len(comp_aa)} comp)...", flush=True)
-    table = build_propensity_table(exp_aa_flat, comp_aa, n_permutations=n_permutations, use_gpu=use_gpu)
-    pt.save("single_aa", table)
-    print(f"  -> single_aa done: {len(table)} elements", flush=True)
+    if _need("single_aa"):
+        print(f"  Building single_aa ({len(exp_aa_flat)} exp, {len(comp_aa)} comp)...", flush=True)
+        table = build_propensity_table(exp_aa_flat, comp_aa, n_permutations=n_permutations, use_gpu=use_gpu)
+        pt.save("single_aa", table)
+        print(f"  -> single_aa done: {len(table)} elements", flush=True)
 
     # --- di_residue: windowed experimental, whole-sequence background ---
-    exp_di = _make_windowed_ngrams(exp_aa_windows, 2)
-    comp_di = _make_ngrams_numpy(comp_aa, 2)
-    print(f"  Building di_residue ({len(exp_di)} exp, {len(comp_di)} comp, "
-          f"{len(set(exp_di)|set(comp_di))} unique)...", flush=True)
-    table = build_propensity_table(exp_di, comp_di, n_permutations=n_permutations, use_gpu=use_gpu)
-    pt.save("di_residue", table)
-    print(f"  -> di_residue done: {len(table)} elements", flush=True)
+    if _need("di_residue"):
+        exp_di = _make_windowed_ngrams(exp_aa_windows, 2)
+        comp_di = _make_ngrams_numpy(comp_aa, 2)
+        print(f"  Building di_residue ({len(exp_di)} exp, {len(comp_di)} comp, "
+              f"{len(set(exp_di)|set(comp_di))} unique)...", flush=True)
+        table = build_propensity_table(exp_di, comp_di, n_permutations=n_permutations, use_gpu=use_gpu)
+        pt.save("di_residue", table)
+        print(f"  -> di_residue done: {len(table)} elements", flush=True)
 
     # --- oligo_residue ---
-    exp_oligo = _make_windowed_ngrams(exp_aa_windows, 3)
-    comp_oligo = _make_ngrams_numpy(comp_aa, 3)
-    print(f"  Building oligo_residue ({len(exp_oligo)} exp, {len(comp_oligo)} comp, "
-          f"{len(set(exp_oligo)|set(comp_oligo))} unique)...", flush=True)
-    table = build_propensity_table(exp_oligo, comp_oligo, n_permutations=n_permutations, use_gpu=use_gpu)
-    pt.save("oligo_residue", table)
-    print(f"  -> oligo_residue done: {len(table)} elements", flush=True)
+    if _need("oligo_residue"):
+        exp_oligo = _make_windowed_ngrams(exp_aa_windows, 3)
+        comp_oligo = _make_ngrams_numpy(comp_aa, 3)
+        print(f"  Building oligo_residue ({len(exp_oligo)} exp, {len(comp_oligo)} comp, "
+              f"{len(set(exp_oligo)|set(comp_oligo))} unique)...", flush=True)
+        table = build_propensity_table(exp_oligo, comp_oligo, n_permutations=n_permutations, use_gpu=use_gpu)
+        pt.save("oligo_residue", table)
+        print(f"  -> oligo_residue done: {len(table)} elements", flush=True)
 
     # --- Reduced amino acid alphabet tables (aac3 and aac5) ---
-    # Convert AA data to reduced alphabets
-    exp_aac3_flat = convert_list_aac3(exp_aa_flat)
-    comp_aac3 = convert_list_aac3(comp_aa)
-    exp_aac3_windows = [convert_list_aac3(w) for w in exp_aa_windows]
+    need_aac3 = _need("single_aac3") or _need("di_aac3") or _need("oligo_aac3")
+    need_aac5 = _need("single_aac5") or _need("di_aac5") or _need("oligo_aac5")
 
-    exp_aac5_flat = convert_list_aac5(exp_aa_flat)
-    comp_aac5 = convert_list_aac5(comp_aa)
-    exp_aac5_windows = [convert_list_aac5(w) for w in exp_aa_windows]
+    if need_aac3:
+        exp_aac3_flat = convert_list_aac3(exp_aa_flat)
+        comp_aac3 = convert_list_aac3(comp_aa)
+        exp_aac3_windows = [convert_list_aac3(w) for w in exp_aa_windows]
+
+    if need_aac5:
+        exp_aac5_flat = convert_list_aac5(exp_aa_flat)
+        comp_aac5 = convert_list_aac5(comp_aa)
+        exp_aac5_windows = [convert_list_aac5(w) for w in exp_aa_windows]
 
     # --- single_aac3 ---
-    print(f"  Building single_aac3 ({len(exp_aac3_flat)} exp, {len(comp_aac3)} comp)...", flush=True)
-    table = build_propensity_table(exp_aac3_flat, comp_aac3, n_permutations=n_permutations, use_gpu=use_gpu)
-    pt.save("single_aac3", table)
-    print(f"  -> single_aac3 done: {len(table)} elements", flush=True)
+    if _need("single_aac3"):
+        print(f"  Building single_aac3 ({len(exp_aac3_flat)} exp, {len(comp_aac3)} comp)...", flush=True)
+        table = build_propensity_table(exp_aac3_flat, comp_aac3, n_permutations=n_permutations, use_gpu=use_gpu)
+        pt.save("single_aac3", table)
+        print(f"  -> single_aac3 done: {len(table)} elements", flush=True)
 
     # --- di_aac3 ---
-    exp_di_aac3 = _make_windowed_ngrams(exp_aac3_windows, 2)
-    comp_di_aac3 = _make_ngrams_numpy(comp_aac3, 2)
-    print(f"  Building di_aac3 ({len(exp_di_aac3)} exp, {len(comp_di_aac3)} comp, "
-          f"{len(set(exp_di_aac3)|set(comp_di_aac3))} unique)...", flush=True)
-    table = build_propensity_table(exp_di_aac3, comp_di_aac3, n_permutations=n_permutations, use_gpu=use_gpu)
-    pt.save("di_aac3", table)
-    print(f"  -> di_aac3 done: {len(table)} elements", flush=True)
+    if _need("di_aac3"):
+        exp_di_aac3 = _make_windowed_ngrams(exp_aac3_windows, 2)
+        comp_di_aac3 = _make_ngrams_numpy(comp_aac3, 2)
+        print(f"  Building di_aac3 ({len(exp_di_aac3)} exp, {len(comp_di_aac3)} comp, "
+              f"{len(set(exp_di_aac3)|set(comp_di_aac3))} unique)...", flush=True)
+        table = build_propensity_table(exp_di_aac3, comp_di_aac3, n_permutations=n_permutations, use_gpu=use_gpu)
+        pt.save("di_aac3", table)
+        print(f"  -> di_aac3 done: {len(table)} elements", flush=True)
 
     # --- oligo_aac3 (build each n-gram length separately, then merge) ---
-    # 3-grams (consecutive)
-    exp_3g_aac3 = _make_windowed_ngrams(exp_aac3_windows, 3)
-    comp_3g_aac3 = _make_ngrams_numpy(comp_aac3, 3)
-    print(f"  Building oligo_aac3 tri-grams ({len(exp_3g_aac3)} exp, {len(comp_3g_aac3)} comp)...", flush=True)
-    table3_aac3 = build_propensity_table(exp_3g_aac3, comp_3g_aac3, n_permutations=n_permutations, use_gpu=use_gpu)
-    # 4-grams (skip-center: positions j, j+1, j+3, j+4)
-    exp_4g_aac3 = _make_skip_center_4grams_windows(exp_aac3_windows)
-    comp_4g_aac3 = _make_skip_center_4grams_sequence(comp_aac3)
-    print(f"  Building oligo_aac3 skip-center 4-grams ({len(exp_4g_aac3)} exp, {len(comp_4g_aac3)} comp)...", flush=True)
-    table4_aac3 = build_propensity_table(exp_4g_aac3, comp_4g_aac3, n_permutations=n_permutations, use_gpu=use_gpu)
-    # 5-grams (consecutive)
-    exp_5g_aac3 = _make_windowed_ngrams(exp_aac3_windows, 5)
-    comp_5g_aac3 = _make_ngrams_numpy(comp_aac3, 5)
-    print(f"  Building oligo_aac3 penta-grams ({len(exp_5g_aac3)} exp, {len(comp_5g_aac3)} comp)...", flush=True)
-    table5_aac3 = build_propensity_table(exp_5g_aac3, comp_5g_aac3, n_permutations=n_permutations, use_gpu=use_gpu)
-    # Merge (keys don't collide by length)
-    oligo_aac3_combined = {**table3_aac3, **table4_aac3, **table5_aac3}
-    pt.save("oligo_aac3", oligo_aac3_combined)
-    print(f"  -> oligo_aac3 done: {len(oligo_aac3_combined)} elements", flush=True)
+    if _need("oligo_aac3"):
+        # 3-grams (consecutive)
+        exp_3g_aac3 = _make_windowed_ngrams(exp_aac3_windows, 3)
+        comp_3g_aac3 = _make_ngrams_numpy(comp_aac3, 3)
+        print(f"  Building oligo_aac3 tri-grams ({len(exp_3g_aac3)} exp, {len(comp_3g_aac3)} comp)...", flush=True)
+        table3_aac3 = build_propensity_table(exp_3g_aac3, comp_3g_aac3, n_permutations=n_permutations, use_gpu=use_gpu)
+        # 4-grams (skip-center: positions j, j+1, j+3, j+4)
+        exp_4g_aac3 = _make_skip_center_4grams_windows(exp_aac3_windows)
+        comp_4g_aac3 = _make_skip_center_4grams_sequence(comp_aac3)
+        print(f"  Building oligo_aac3 skip-center 4-grams ({len(exp_4g_aac3)} exp, {len(comp_4g_aac3)} comp)...", flush=True)
+        table4_aac3 = build_propensity_table(exp_4g_aac3, comp_4g_aac3, n_permutations=n_permutations, use_gpu=use_gpu)
+        # 5-grams (consecutive)
+        exp_5g_aac3 = _make_windowed_ngrams(exp_aac3_windows, 5)
+        comp_5g_aac3 = _make_ngrams_numpy(comp_aac3, 5)
+        print(f"  Building oligo_aac3 penta-grams ({len(exp_5g_aac3)} exp, {len(comp_5g_aac3)} comp)...", flush=True)
+        table5_aac3 = build_propensity_table(exp_5g_aac3, comp_5g_aac3, n_permutations=n_permutations, use_gpu=use_gpu)
+        # Merge (keys don't collide by length)
+        oligo_aac3_combined = {**table3_aac3, **table4_aac3, **table5_aac3}
+        pt.save("oligo_aac3", oligo_aac3_combined)
+        print(f"  -> oligo_aac3 done: {len(oligo_aac3_combined)} elements", flush=True)
 
     # --- single_aac5 ---
-    print(f"  Building single_aac5 ({len(exp_aac5_flat)} exp, {len(comp_aac5)} comp)...", flush=True)
-    table = build_propensity_table(exp_aac5_flat, comp_aac5, n_permutations=n_permutations, use_gpu=use_gpu)
-    pt.save("single_aac5", table)
-    print(f"  -> single_aac5 done: {len(table)} elements", flush=True)
+    if _need("single_aac5"):
+        print(f"  Building single_aac5 ({len(exp_aac5_flat)} exp, {len(comp_aac5)} comp)...", flush=True)
+        table = build_propensity_table(exp_aac5_flat, comp_aac5, n_permutations=n_permutations, use_gpu=use_gpu)
+        pt.save("single_aac5", table)
+        print(f"  -> single_aac5 done: {len(table)} elements", flush=True)
 
     # --- di_aac5 ---
-    exp_di_aac5 = _make_windowed_ngrams(exp_aac5_windows, 2)
-    comp_di_aac5 = _make_ngrams_numpy(comp_aac5, 2)
-    print(f"  Building di_aac5 ({len(exp_di_aac5)} exp, {len(comp_di_aac5)} comp, "
-          f"{len(set(exp_di_aac5)|set(comp_di_aac5))} unique)...", flush=True)
-    table = build_propensity_table(exp_di_aac5, comp_di_aac5, n_permutations=n_permutations, use_gpu=use_gpu)
-    pt.save("di_aac5", table)
-    print(f"  -> di_aac5 done: {len(table)} elements", flush=True)
+    if _need("di_aac5"):
+        exp_di_aac5 = _make_windowed_ngrams(exp_aac5_windows, 2)
+        comp_di_aac5 = _make_ngrams_numpy(comp_aac5, 2)
+        print(f"  Building di_aac5 ({len(exp_di_aac5)} exp, {len(comp_di_aac5)} comp, "
+              f"{len(set(exp_di_aac5)|set(comp_di_aac5))} unique)...", flush=True)
+        table = build_propensity_table(exp_di_aac5, comp_di_aac5, n_permutations=n_permutations, use_gpu=use_gpu)
+        pt.save("di_aac5", table)
+        print(f"  -> di_aac5 done: {len(table)} elements", flush=True)
 
     # --- oligo_aac5 (build each n-gram length separately, then merge — no 5R for aac5) ---
-    # 3-grams (consecutive)
-    exp_3g_aac5 = _make_windowed_ngrams(exp_aac5_windows, 3)
-    comp_3g_aac5 = _make_ngrams_numpy(comp_aac5, 3)
-    print(f"  Building oligo_aac5 tri-grams ({len(exp_3g_aac5)} exp, {len(comp_3g_aac5)} comp)...", flush=True)
-    table3_aac5 = build_propensity_table(exp_3g_aac5, comp_3g_aac5, n_permutations=n_permutations, use_gpu=use_gpu)
-    # 4-grams (skip-center: positions j, j+1, j+3, j+4)
-    exp_4g_aac5 = _make_skip_center_4grams_windows(exp_aac5_windows)
-    comp_4g_aac5 = _make_skip_center_4grams_sequence(comp_aac5)
-    print(f"  Building oligo_aac5 skip-center 4-grams ({len(exp_4g_aac5)} exp, {len(comp_4g_aac5)} comp)...", flush=True)
-    table4_aac5 = build_propensity_table(exp_4g_aac5, comp_4g_aac5, n_permutations=n_permutations, use_gpu=use_gpu)
-    # Merge (keys don't collide by length)
-    oligo_aac5_combined = {**table3_aac5, **table4_aac5}
-    pt.save("oligo_aac5", oligo_aac5_combined)
-    print(f"  -> oligo_aac5 done: {len(oligo_aac5_combined)} elements", flush=True)
+    if _need("oligo_aac5"):
+        # 3-grams (consecutive)
+        exp_3g_aac5 = _make_windowed_ngrams(exp_aac5_windows, 3)
+        comp_3g_aac5 = _make_ngrams_numpy(comp_aac5, 3)
+        print(f"  Building oligo_aac5 tri-grams ({len(exp_3g_aac5)} exp, {len(comp_3g_aac5)} comp)...", flush=True)
+        table3_aac5 = build_propensity_table(exp_3g_aac5, comp_3g_aac5, n_permutations=n_permutations, use_gpu=use_gpu)
+        # 4-grams (skip-center: positions j, j+1, j+3, j+4)
+        exp_4g_aac5 = _make_skip_center_4grams_windows(exp_aac5_windows)
+        comp_4g_aac5 = _make_skip_center_4grams_sequence(comp_aac5)
+        print(f"  Building oligo_aac5 skip-center 4-grams ({len(exp_4g_aac5)} exp, {len(comp_4g_aac5)} comp)...", flush=True)
+        table4_aac5 = build_propensity_table(exp_4g_aac5, comp_4g_aac5, n_permutations=n_permutations, use_gpu=use_gpu)
+        # Merge (keys don't collide by length)
+        oligo_aac5_combined = {**table3_aac5, **table4_aac5}
+        pt.save("oligo_aac5", oligo_aac5_combined)
+        print(f"  -> oligo_aac5 done: {len(oligo_aac5_combined)} elements", flush=True)
 
     # --- dssp ---
-    print(f"  Building dssp ({len(exp_dssp_flat)} exp, {len(comp_dssp)} comp)...", flush=True)
-    table = build_propensity_table(exp_dssp_flat, comp_dssp, n_permutations=n_permutations, use_gpu=use_gpu)
-    pt.save("dssp", table)
-    print(f"  -> dssp done: {len(table)} elements", flush=True)
+    if _need("dssp"):
+        print(f"  Building dssp ({len(exp_dssp_flat)} exp, {len(comp_dssp)} comp)...", flush=True)
+        table = build_propensity_table(exp_dssp_flat, comp_dssp, n_permutations=n_permutations, use_gpu=use_gpu)
+        pt.save("dssp", table)
+        print(f"  -> dssp done: {len(table)} elements", flush=True)
 
-    exp_di_dssp = _make_windowed_ngrams(exp_dssp_windows, 2)
-    comp_di_dssp = _make_ngrams_numpy(comp_dssp, 2)
-    print(f"  Building di_dssp ({len(exp_di_dssp)} exp, {len(comp_di_dssp)} comp, "
-          f"{len(set(exp_di_dssp)|set(comp_di_dssp))} unique)...", flush=True)
-    table = build_propensity_table(exp_di_dssp, comp_di_dssp, n_permutations=n_permutations, use_gpu=use_gpu)
-    pt.save("di_dssp", table)
-    print(f"  -> di_dssp done: {len(table)} elements", flush=True)
+    if _need("di_dssp"):
+        exp_di_dssp = _make_windowed_ngrams(exp_dssp_windows, 2)
+        comp_di_dssp = _make_ngrams_numpy(comp_dssp, 2)
+        print(f"  Building di_dssp ({len(exp_di_dssp)} exp, {len(comp_di_dssp)} comp, "
+              f"{len(set(exp_di_dssp)|set(comp_di_dssp))} unique)...", flush=True)
+        table = build_propensity_table(exp_di_dssp, comp_di_dssp, n_permutations=n_permutations, use_gpu=use_gpu)
+        pt.save("di_dssp", table)
+        print(f"  -> di_dssp done: {len(table)} elements", flush=True)
 
     # --- ramachandran ---
-    print(f"  Building ramachandran ({len(exp_rama_flat)} exp, {len(comp_rama)} comp)...", flush=True)
-    table = build_propensity_table(exp_rama_flat, comp_rama, n_permutations=n_permutations, use_gpu=use_gpu)
-    pt.save("ramachandran", table)
-    print(f"  -> ramachandran done: {len(table)} elements", flush=True)
+    if _need("ramachandran"):
+        print(f"  Building ramachandran ({len(exp_rama_flat)} exp, {len(comp_rama)} comp)...", flush=True)
+        table = build_propensity_table(exp_rama_flat, comp_rama, n_permutations=n_permutations, use_gpu=use_gpu)
+        pt.save("ramachandran", table)
+        print(f"  -> ramachandran done: {len(table)} elements", flush=True)
 
-    exp_di_rama = _make_windowed_ngrams(exp_rama_windows, 2)
-    comp_di_rama = _make_ngrams_numpy(comp_rama, 2)
-    print(f"  Building di_ramachandran ({len(exp_di_rama)} exp, {len(comp_di_rama)} comp, "
-          f"{len(set(exp_di_rama)|set(comp_di_rama))} unique)...", flush=True)
-    table = build_propensity_table(exp_di_rama, comp_di_rama, n_permutations=n_permutations, use_gpu=use_gpu)
-    pt.save("di_ramachandran", table)
-    print(f"  -> di_ramachandran done: {len(table)} elements", flush=True)
+    if _need("di_ramachandran"):
+        exp_di_rama = _make_windowed_ngrams(exp_rama_windows, 2)
+        comp_di_rama = _make_ngrams_numpy(comp_rama, 2)
+        print(f"  Building di_ramachandran ({len(exp_di_rama)} exp, {len(comp_di_rama)} comp, "
+              f"{len(set(exp_di_rama)|set(comp_di_rama))} unique)...", flush=True)
+        table = build_propensity_table(exp_di_rama, comp_di_rama, n_permutations=n_permutations, use_gpu=use_gpu)
+        pt.save("di_ramachandran", table)
+        print(f"  -> di_ramachandran done: {len(table)} elements", flush=True)
 
     # --- kappa_alpha ---
-    print(f"  Building kappa_alpha ({len(exp_ka_flat)} exp, {len(comp_ka)} comp)...", flush=True)
-    table = build_propensity_table(exp_ka_flat, comp_ka, n_permutations=n_permutations, use_gpu=use_gpu)
-    pt.save("kappa_alpha", table)
-    print(f"  -> kappa_alpha done: {len(table)} elements", flush=True)
+    if _need("kappa_alpha"):
+        print(f"  Building kappa_alpha ({len(exp_ka_flat)} exp, {len(comp_ka)} comp)...", flush=True)
+        table = build_propensity_table(exp_ka_flat, comp_ka, n_permutations=n_permutations, use_gpu=use_gpu)
+        pt.save("kappa_alpha", table)
+        print(f"  -> kappa_alpha done: {len(table)} elements", flush=True)
 
-    exp_di_ka = _make_windowed_ngrams(exp_ka_windows, 2)
-    comp_di_ka = _make_ngrams_numpy(comp_ka, 2)
-    print(f"  Building di_kappa_alpha ({len(exp_di_ka)} exp, {len(comp_di_ka)} comp, "
-          f"{len(set(exp_di_ka)|set(comp_di_ka))} unique)...", flush=True)
-    table = build_propensity_table(exp_di_ka, comp_di_ka, n_permutations=n_permutations, use_gpu=use_gpu)
-    pt.save("di_kappa_alpha", table)
-    print(f"  -> di_kappa_alpha done: {len(table)} elements", flush=True)
+    if _need("di_kappa_alpha"):
+        exp_di_ka = _make_windowed_ngrams(exp_ka_windows, 2)
+        comp_di_ka = _make_ngrams_numpy(comp_ka, 2)
+        print(f"  Building di_kappa_alpha ({len(exp_di_ka)} exp, {len(comp_di_ka)} comp, "
+              f"{len(set(exp_di_ka)|set(comp_di_ka))} unique)...", flush=True)
+        table = build_propensity_table(exp_di_ka, comp_di_ka, n_permutations=n_permutations, use_gpu=use_gpu)
+        pt.save("di_kappa_alpha", table)
+        print(f"  -> di_kappa_alpha done: {len(table)} elements", flush=True)
 
     pt.load()
     print("  Propensity tables built and saved.")
@@ -744,7 +770,8 @@ def main():
         tables = build_propensity_tables_from_data(proteins_s4, proteins_s2,
                                                     pdb_dir, args.tables_dir,
                                                     use_gpu=use_gpu,
-                                                    n_permutations=args.n_permutations)
+                                                    n_permutations=args.n_permutations,
+                                                    only_tables=missing)
 
     # =========================================================
     # Step 4: Extract features for Dataset T proteins only
