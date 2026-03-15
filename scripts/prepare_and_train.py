@@ -782,6 +782,7 @@ def main():
 
     all_X = []
     all_y = []
+    all_groups = []  # protein index per sample, for leave-one-protein-out CV
     processed = 0
     skipped = 0
 
@@ -803,6 +804,7 @@ def main():
             X, y = result
             all_X.append(X)
             all_y.append(y)
+            all_groups.append(np.full(len(y), processed, dtype=int))
             processed += 1
             rmsf_idx = feature_names.index("rmsf") if "rmsf" in feature_names else None
             rmsf_info = (f", RMSF nonzero={int(np.count_nonzero(~np.isnan(X[:, rmsf_idx])))}/{len(y)}"
@@ -820,6 +822,7 @@ def main():
 
     X_train = np.vstack(all_X)
     y_train = np.concatenate(all_y)
+    groups_train = np.concatenate(all_groups)
 
     n_pos = int(y_train.sum())
     n_neg = len(y_train) - n_pos
@@ -860,7 +863,7 @@ def main():
     print("=" * 60)
 
     ensemble = CPredEnsemble(feature_names=feature_names)
-    ensemble.fit(X_train, y_train, feature_names=feature_names)
+    ensemble.fit(X_train, y_train, feature_names=feature_names, groups=groups_train)
 
     # Evaluate on training set
     train_probs = ensemble.predict_unsmoothed(X_train)

@@ -28,8 +28,13 @@ class CPredSVM:
         self._fitted = False
 
     def fit(self, X: np.ndarray, y: np.ndarray,
-            grid_search: bool = True) -> None:
-        """Train the SVM model, optionally with grid search."""
+            grid_search: bool = True, groups: np.ndarray | None = None) -> None:
+        """Train the SVM model, optionally with grid search.
+
+        Args:
+            groups: protein-level group labels for leave-one-protein-out CV.
+                    If provided, uses LeaveOneGroupOut instead of 5-fold CV.
+        """
         if grid_search:
             # LIBSVM grid.py defaults: C in 2^{-5,-3,...,15}, gamma in 2^{-15,-13,...,3}
             # (Lo et al. 2012, page 16-17: "determined by the program grid.py
@@ -38,11 +43,16 @@ class CPredSVM:
                 "C": [2**i for i in range(-5, 16, 2)],
                 "gamma": [2**i for i in range(-15, 4, 2)],
             }
+            if groups is not None:
+                from sklearn.model_selection import LeaveOneGroupOut
+                cv = LeaveOneGroupOut()
+            else:
+                cv = 5
             gs = GridSearchCV(
                 self.model, param_grid,
-                scoring="roc_auc", cv=5, n_jobs=-1, verbose=0,
+                scoring="roc_auc", cv=cv, n_jobs=-1, verbose=0,
             )
-            gs.fit(X, y)
+            gs.fit(X, y, groups=groups)
             self.model = gs.best_estimator_
         else:
             self.model.fit(X, y)

@@ -57,7 +57,7 @@ class CPredANN:
 
     def __init__(self, n_features: int = 46, lr: float = 0.5,
                  momentum: float = 0.1, n_iterations: int = 5000,
-                 n_restarts: int = 10, hidden_size: int | None = None):
+                 n_restarts: int = 30, hidden_size: int | None = None):
         self.n_features = n_features
         self.lr = lr
         self.momentum = momentum
@@ -76,25 +76,33 @@ class CPredANN:
 
     def _train_one(self, X_t: 'torch.Tensor', y_t: 'torch.Tensor',
                    seed: int) -> tuple['CPredANNModule', float]:
-        """Train a single ANN with given seed. Returns (model, final_loss)."""
+        """Train a single ANN with given seed. Returns (model, final_loss).
+
+        Uses epoch-based SGD: shuffles all samples each epoch, processes
+        sequentially. Total updates ≈ n_iterations (ceil(n_iter/n_samples) epochs).
+        """
         torch.manual_seed(seed)
         model = CPredANNModule(self.n_features, hidden_size=self.hidden_size).to(self.device)
         optimizer = torch.optim.SGD(
             model.parameters(), lr=self.lr, momentum=self.momentum)
 
         n_samples = len(y_t)
-
-        # Pre-sample all indices at once to avoid Python-level per-step overhead
-        indices = torch.randint(0, n_samples, (self.n_iterations,),
-                                generator=torch.Generator().manual_seed(seed))
+        n_epochs = max(1, (self.n_iterations + n_samples - 1) // n_samples)
+        gen = torch.Generator().manual_seed(seed)
 
         model.train()
-        for idx in indices:
-            optimizer.zero_grad()
-            pred = model(X_t[idx:idx+1])
-            loss = nn.functional.binary_cross_entropy(pred, y_t[idx:idx+1])
-            loss.backward()
-            optimizer.step()
+        updates = 0
+        for epoch in range(n_epochs):
+            perm = torch.randperm(n_samples, generator=gen)
+            for idx in perm:
+                if updates >= self.n_iterations:
+                    break
+                optimizer.zero_grad()
+                pred = model(X_t[idx:idx+1])
+                loss = nn.functional.binary_cross_entropy(pred, y_t[idx:idx+1])
+                loss.backward()
+                optimizer.step()
+                updates += 1
 
         # Compute full training loss for model selection
         model.eval()

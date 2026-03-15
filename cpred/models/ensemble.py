@@ -55,13 +55,18 @@ class CPredEnsemble:
         self._fitted = False
 
     def fit(self, X: np.ndarray, y: np.ndarray,
-            feature_names: list[str] | None = None) -> None:
-        """Train all four component models."""
+            feature_names: list[str] | None = None,
+            groups: np.ndarray | None = None) -> None:
+        """Train all four component models.
+
+        Args:
+            groups: protein-level group labels for SVM leave-one-protein-out CV.
+        """
         print("Training Random Forest...")
         self.rf.fit(X, y)
 
         print("Training SVM...")
-        self.svm.fit(X, y, grid_search=True)
+        self.svm.fit(X, y, grid_search=True, groups=groups)
 
         print("Training ANN...")
         self.ann.fit(X, y)

@@ -51,6 +51,7 @@ class CPredRandomForest:
             tree = DecisionTreeClassifier(
                 criterion="entropy",
                 max_features=max_features,
+                min_samples_leaf=5,
                 random_state=seed,
             )
             tree.fit(X_boot, y_boot)
